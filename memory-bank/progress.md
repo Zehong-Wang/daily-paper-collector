@@ -22,10 +22,14 @@
 - **Step 4.2** — `find_similar()` method: matrix cosine similarity (`papers @ interests.T`), takes MAX score per paper across all interests, filters by configurable threshold, returns top-N sorted descending with `embedding_score` field.
 - **Tests** — `tests/test_embedder.py` with 17 tests covering: embedding shape/normalization, serialize/deserialize round-trip, compute methods with mocked store, lazy model loading, `find_similar` (top-N selection, descending sort, threshold filtering, empty inputs, field preservation, MAX-across-interests). Tests use the real model (module-scoped fixture to avoid reloading).
 
-## Next Up
+### Phase 1: Database Layer (Done)
+- **Step 1.1** — `PaperStore` class in `src/store/database.py`. Schema initialization for 5 tables (papers, interests, matches, summaries, daily_reports). WAL mode enabled, foreign keys enforced. Idempotent `_init_db()` with `CREATE TABLE IF NOT EXISTS`. Each method opens and closes its own connection via `_get_conn()` (row_factory = sqlite3.Row for dict-like access).
+- **Step 1.2** — Paper CRUD: `save_papers` (INSERT OR IGNORE for deduplication, returns only newly inserted papers with assigned IDs), `get_paper_by_arxiv_id`, `get_papers_by_date`, `search_papers` (LIKE on title/abstract), `update_paper_embedding`, `get_papers_without_embeddings`, `get_papers_with_embeddings`, `get_papers_by_date_with_embeddings`. Authors and categories stored as JSON strings, deserialized on read via `_row_to_paper()`.
+- **Step 1.3** — Interest CRUD: `save_interest`, `get_all_interests`, `get_interest_by_id`, `update_interest` (partial updates — only non-None fields), `delete_interest`, `update_interest_embedding`, `get_interests_with_embeddings`.
+- **Step 1.4** — Match CRUD: `save_match`, `get_matches_by_date` (JOIN with papers table, ORDER BY llm_score DESC with NULLS LAST, then embedding_score DESC). Summary CRUD: `save_summary`, `get_summary` (by paper_id + summary_type). Report CRUD: `save_report`, `get_report_by_date`, `get_all_report_dates` (sorted descending).
+- **Tests** — `tests/test_store.py` with 30 tests across 6 test classes: TestSchemaInit (3 tests), TestPaperCRUD (14 tests), TestInterestCRUD (10 tests), TestMatchCRUD (3 tests), TestSummaryCRUD (3 tests), TestReportCRUD (4 tests). All use `tmp_path` fixture for isolated temp DBs. No mocks needed — tests the real SQLite layer.
 
-### Phase 1: Database Layer (`src/store/database.py`)
-- Steps 1.1–1.4: PaperStore class with schema init, Paper CRUD, Interest CRUD, Match/Summary/Report CRUD
+## Next Up
 
 ### Phase 5: Interest Manager (`src/interest/manager.py`)
 - Step 5.1: InterestManager with auto-fetch abstracts from DB/arXiv + embedding recomputation
@@ -33,8 +37,10 @@
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).
 - Phase 4 was implemented before Phase 1. The `compute_embeddings` and `compute_interest_embeddings` methods accept a `store` parameter (duck-typed), so they work without a concrete `PaperStore` — tests use `MagicMock`.
+- Phase 1 was implemented 5th (after 0, 2, 3, 4) because earlier phases duck-typed the store dependency. Now that PaperStore exists, Phase 5 (InterestManager) can use the real store in its tests.
 - All LLM providers use async interfaces. Tests mock the underlying SDK clients — no API keys needed to run tests.
 - `ClaudeCodeProvider` sends the system message prepended to the user prompt via stdin (CLI doesn't have a separate system parameter).
 - `ClaudeProvider` and `ClaudeCodeProvider` both strip markdown code fences (```json ... ```) from JSON responses since these models may wrap JSON in code blocks.
 - The factory function uses lazy imports to avoid loading unused SDK dependencies.
 - Embedder tests use a module-scoped fixture (`scope="module"`) so the ~80MB model is loaded only once across all test functions. The `find_similar` tests use synthetic normalized vectors via `_make_normalized_vector()` helper — no model loading needed for those.
+- PaperStore tests use `tmp_path` for isolated databases — no cleanup needed, no interference between tests. Each test class covers one CRUD domain (papers, interests, matches, summaries, reports).

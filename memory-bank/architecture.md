@@ -79,13 +79,52 @@ Local embedding computation and cosine similarity matching using `sentence-trans
 
 Used by: `DailyPipeline` (Phase 10) for coarse filtering, `InterestManager` (Phase 5) for embedding computation.
 
+### `src/store/database.py` — PaperStore (SQLite CRUD Layer)
+Central persistence layer. All data flows through this class — papers, interests, matches, summaries, and reports.
+
+- `__init__(db_path)` — Stores path, calls `_init_db()` to create schema. Uses `logging.getLogger(__name__)`.
+- `_init_db()` — Creates all 5 tables via `CREATE TABLE IF NOT EXISTS` (idempotent). Enables `PRAGMA journal_mode=WAL` (concurrent reads during writes) and `PRAGMA foreign_keys=ON`.
+- `_get_conn() -> sqlite3.Connection` — Creates a new connection each call with `row_factory = sqlite3.Row` for dict-like access. Every public method opens and closes its own connection (no shared connection state — safe for multi-threaded access from Streamlit).
+- `_row_to_paper(row) -> dict` — Converts `sqlite3.Row` to dict, deserializing `authors` and `categories` from JSON strings back to Python lists.
+
+**Paper methods:**
+- `save_papers(papers) -> list[dict]` — Bulk insert via `INSERT OR IGNORE`. Deduplication by `arxiv_id` UNIQUE constraint. Returns only newly inserted papers (checks `cursor.rowcount > 0`), each augmented with their assigned `id`.
+- `get_paper_by_arxiv_id(arxiv_id) -> dict | None` — Single paper lookup.
+- `get_papers_by_date(date) -> list[dict]` — All papers for a given `published_date`.
+- `search_papers(query, limit=50) -> list[dict]` — `LIKE '%query%'` on title and abstract.
+- `update_paper_embedding(paper_id, embedding_bytes)` — Updates BLOB column.
+- `get_papers_without_embeddings() -> list[dict]` — Papers with `embedding IS NULL`.
+- `get_papers_with_embeddings() -> list[dict]` — Papers with `embedding IS NOT NULL`, includes the BLOB.
+- `get_papers_by_date_with_embeddings(date) -> list[dict]` — Combines date filter + embedding filter. Used by the pipeline to match only today's papers.
+
+**Interest methods:**
+- `save_interest(type, value, description=None) -> int` — Insert, return new ID.
+- `get_all_interests() -> list[dict]`, `get_interest_by_id(id) -> dict | None`
+- `update_interest(id, value=None, description=None)` — Partial update: only sets non-None fields.
+- `delete_interest(id)`, `update_interest_embedding(id, embedding_bytes)`
+- `get_interests_with_embeddings() -> list[dict]` — Interests with computed embeddings.
+
+**Match methods:**
+- `save_match(paper_id, run_date, embedding_score, llm_score=None, llm_reason=None) -> int`
+- `get_matches_by_date(run_date) -> list[dict]` — JOINs with papers table to include title, arxiv_id, abstract, authors, categories, pdf_url. Ordered by `llm_score DESC` with NULLS LAST (via CASE expression), then `embedding_score DESC`.
+
+**Summary methods:**
+- `save_summary(paper_id, summary_type, content, llm_provider=None) -> int`
+- `get_summary(paper_id, summary_type) -> dict | None` — Cache lookup for paper summarization.
+
+**Report methods:**
+- `save_report(run_date, general_report, specific_report, paper_count, matched_count) -> int`
+- `get_report_by_date(run_date) -> dict | None`
+- `get_all_report_dates() -> list[str]` — Sorted descending.
+
+Used by: Every component that touches persistent data — `DailyPipeline`, `InterestManager`, `Embedder.compute_embeddings`, `PaperSummarizer`, all GUI pages.
+
 ---
 
 ## Not Yet Implemented
 
 | File | Phase | Purpose |
 |------|-------|---------|
-| `src/store/database.py` | 1 | SQLite PaperStore — 5 tables (papers, interests, matches, summaries, daily_reports) |
 | `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
 | `src/matcher/ranker.py` | 6 | LLM re-ranking with concurrent scoring (asyncio.gather + Semaphore) |
 | `src/report/generator.py` | 7 | Markdown report generation (general + specific) |
@@ -114,3 +153,7 @@ Used by: `DailyPipeline` (Phase 10) for coarse filtering, `InterestManager` (Pha
 | Normalized embeddings | `normalize_embeddings=True` in encode | Dot product = cosine similarity, no need for separate normalization |
 | MAX interest scoring | `similarity_matrix.max(axis=1)` | A paper matching any single interest well is sufficient for recommendation |
 | Duck-typed store parameter | `compute_embeddings(papers, store)` | Decouples embedder from concrete PaperStore; testable with MagicMock |
+| Connection-per-call | `_get_conn()` creates new connection each method call | Safe for multi-threaded Streamlit; no shared mutable connection state |
+| JSON serialization for lists | `authors`/`categories` stored as JSON strings | SQLite has no array type; JSON round-trips cleanly via `json.dumps`/`json.loads` |
+| NULLS LAST ordering | `CASE WHEN llm_score IS NULL THEN 1 ELSE 0 END` | Papers with LLM scores ranked above unscored ones in match results |
+| INSERT OR IGNORE dedup | `save_papers` uses `arxiv_id UNIQUE` constraint | Relies on DB-level uniqueness; no pre-query needed for duplicate detection |

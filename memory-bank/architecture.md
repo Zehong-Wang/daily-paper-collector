@@ -61,6 +61,24 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 
 Used by: `DailyPipeline` (Phase 10), `InterestManager._fetch_abstract_from_arxiv` uses the same `arxiv` library directly (Phase 5).
 
+### `src/matcher/embedder.py` — Embedder
+Local embedding computation and cosine similarity matching using `sentence-transformers`.
+
+- `__init__(config)` — reads `config["matching"]["embedding_model"]` (default `all-MiniLM-L6-v2`, 384 dims). Model is **lazy-loaded** via `@property` — the ~80MB model downloads/loads only on first call to `embed_text` or `embed_texts`, not at init time.
+- `embed_text(text) -> np.ndarray` — Embeds a single string. Returns a normalized 1D array of shape `(384,)`.
+- `embed_texts(texts) -> np.ndarray` — Batch embedding. Returns a normalized 2D array of shape `(N, 384)`. Uses `show_progress_bar=False` for clean logs.
+- `serialize_embedding(embedding) -> bytes` — Converts `np.float32` array to raw bytes for SQLite BLOB storage. Static method.
+- `deserialize_embedding(blob, dim=384) -> np.ndarray` — Converts bytes back to numpy array. Handles both exact-dim and arbitrary-length blobs. Static method.
+- `compute_embeddings(papers, store)` — Batch-embeds paper abstracts via `embed_texts()`, serializes each, and calls `store.update_paper_embedding(id, blob)`. Accepts any object with that method (duck-typed).
+- `compute_interest_embeddings(interests, store)` — Embeds each interest individually. For interests with a description, embeds `"{value}: {description}"`; otherwise just `"{value}"`. Calls `store.update_interest_embedding(id, blob)`.
+- `find_similar(interests, papers, top_n, threshold=0.3) -> list[dict]` — Two-stage cosine similarity matching:
+  1. Deserializes all interest and paper embeddings from bytes blobs into numpy matrices.
+  2. Computes similarity matrix via `papers_matrix @ interests_matrix.T` → shape `(N, M)`.
+  3. Takes MAX score per paper across all interests (a paper matching any one interest well is sufficient).
+  4. Filters by threshold, sorts descending, returns top-N papers with `embedding_score` field added.
+
+Used by: `DailyPipeline` (Phase 10) for coarse filtering, `InterestManager` (Phase 5) for embedding computation.
+
 ---
 
 ## Not Yet Implemented
@@ -68,7 +86,6 @@ Used by: `DailyPipeline` (Phase 10), `InterestManager._fetch_abstract_from_arxiv
 | File | Phase | Purpose |
 |------|-------|---------|
 | `src/store/database.py` | 1 | SQLite PaperStore — 5 tables (papers, interests, matches, summaries, daily_reports) |
-| `src/matcher/embedder.py` | 4 | sentence-transformers embedding + cosine similarity matching |
 | `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
 | `src/matcher/ranker.py` | 6 | LLM re-ranking with concurrent scoring (asyncio.gather + Semaphore) |
 | `src/report/generator.py` | 7 | Markdown report generation (general + specific) |
@@ -93,3 +110,7 @@ Used by: `DailyPipeline` (Phase 10), `InterestManager._fetch_abstract_from_arxiv
 | ArXiv date filtering | Python-side filter after fetch | arXiv API sorts by SubmittedDate but doesn't filter by date |
 | ArXiv async wrapping | `asyncio.to_thread` around sync `arxiv.Client` | Avoids blocking the event loop; arxiv lib is synchronous |
 | ArXiv ID normalization | Regex strip `v\d+$` suffix | Ensures consistent IDs for deduplication and DB storage |
+| Lazy model loading | `@property` with `_model = None` | Avoids loading ~80MB model until first embedding call |
+| Normalized embeddings | `normalize_embeddings=True` in encode | Dot product = cosine similarity, no need for separate normalization |
+| MAX interest scoring | `similarity_matrix.max(axis=1)` | A paper matching any single interest well is sufficient for recommendation |
+| Duck-typed store parameter | `compute_embeddings(papers, store)` | Decouples embedder from concrete PaperStore; testable with MagicMock |

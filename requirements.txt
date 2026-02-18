@@ -1,0 +1,24 @@
+# Core
+arxiv>=2.1
+sentence-transformers>=3.0
+numpy>=1.26
+openai>=1.0
+anthropic>=0.30
+streamlit>=1.40
+apscheduler>=3.10
+markdown>=3.5
+premailer>=3.10
+beautifulsoup4>=4.12
+lxml>=5.0
+requests>=2.31
+pyyaml>=6.0
+python-dotenv>=1.0
+
+# Optional (uncomment if needed)
+# faiss-cpu>=1.8
+
+# Dev
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-cov>=5.0
+ruff>=0.4

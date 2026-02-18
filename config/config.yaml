@@ -1,0 +1,54 @@
+# arXiv settings
+arxiv:
+  categories:
+    - cs.AI
+    - cs.CL
+    - cs.LG
+    - cs.CV
+  max_results_per_category: 200
+
+# Matching settings
+matching:
+  embedding_model: "all-MiniLM-L6-v2"
+  embedding_top_n: 50        # coarse filtering candidate count
+  llm_top_k: 10              # final recommendation count
+  similarity_threshold: 0.3  # minimum similarity threshold
+
+# LLM settings
+llm:
+  provider: "openai"         # openai | claude | claude_code
+  openai:
+    model: "gpt-4o-mini"
+    api_key_env: "OPENAI_API_KEY"
+  claude:
+    model: "claude-sonnet-4-5-20250929"
+    api_key_env: "ANTHROPIC_API_KEY"
+  claude_code:
+    cli_path: "claude"       # path to claude CLI
+    model: "sonnet"
+
+# Email settings
+email:
+  enabled: true
+  smtp:
+    host: "smtp.gmail.com"
+    port: 587
+    username_env: "EMAIL_USERNAME"
+    password_env: "EMAIL_PASSWORD"
+  from: "your-email@gmail.com"
+  to:
+    - "recipient@example.com"
+  subject_prefix: "[Daily Papers]"
+
+# Scheduler settings
+scheduler:
+  enabled: true
+  cron: "0 8 * * *"          # daily at 8:00 AM
+
+# Database
+database:
+  path: "data/papers.db"
+
+# GUI
+gui:
+  port: 8501

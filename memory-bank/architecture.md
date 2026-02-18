@@ -51,6 +51,16 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 - `complete_json()` strips markdown code fences before parsing, same as ClaudeProvider.
 - Raises `RuntimeError` on non-zero exit code with stderr details.
 
+### `src/fetcher/arxiv_fetcher.py` — ArxivFetcher
+- Fetches daily papers from user-configured arXiv categories using the `arxiv` Python library.
+- `__init__(config)` — reads `config["arxiv"]["categories"]` (list of category strings) and `config["arxiv"]["max_results_per_category"]`.
+- `fetch_today(cutoff_days=2)` — async entry point. Iterates over categories, calls `_fetch_category` via `asyncio.to_thread` to avoid blocking the event loop. Deduplicates results across categories. Default `cutoff_days=2` accounts for timezone/indexing delays.
+- `_fetch_category(category, cutoff_date)` — queries `arxiv.Search(query="cat:{category}", sort_by=SubmittedDate)`. The arXiv API sorts but does **not** filter by date, so filtering is done in Python (`published.date() >= cutoff_date`). Strips version suffix from arxiv_id via regex (`2501.12345v2` → `2501.12345`). Strips newlines from title and abstract. Constructs ar5iv URL from arxiv_id.
+- `_deduplicate(papers)` — removes duplicates by arxiv_id, keeping first occurrence. Needed because a paper can appear in multiple categories.
+- Returns list of dicts with keys: `arxiv_id`, `title`, `authors`, `abstract`, `categories`, `published_date`, `pdf_url`, `ar5iv_url`.
+
+Used by: `DailyPipeline` (Phase 10), `InterestManager._fetch_abstract_from_arxiv` uses the same `arxiv` library directly (Phase 5).
+
 ---
 
 ## Not Yet Implemented
@@ -58,7 +68,6 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 | File | Phase | Purpose |
 |------|-------|---------|
 | `src/store/database.py` | 1 | SQLite PaperStore — 5 tables (papers, interests, matches, summaries, daily_reports) |
-| `src/fetcher/arxiv_fetcher.py` | 3 | ArXiv API fetching with Python-side date filtering |
 | `src/matcher/embedder.py` | 4 | sentence-transformers embedding + cosine similarity matching |
 | `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
 | `src/matcher/ranker.py` | 6 | LLM re-ranking with concurrent scoring (asyncio.gather + Semaphore) |
@@ -81,3 +90,6 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 | JSON fence stripping | Regex strip of ````json ... ```` | Claude models wrap JSON in code blocks despite instructions |
 | Claude CLI integration | subprocess via `asyncio.create_subprocess_exec` | Zero cost, leverages existing subscription |
 | System message in CLI | Prepended to prompt | CLI has no separate system parameter |
+| ArXiv date filtering | Python-side filter after fetch | arXiv API sorts by SubmittedDate but doesn't filter by date |
+| ArXiv async wrapping | `asyncio.to_thread` around sync `arxiv.Client` | Avoids blocking the event loop; arxiv lib is synchronous |
+| ArXiv ID normalization | Regex strip `v\d+$` suffix | Ensures consistent IDs for deduplication and DB storage |

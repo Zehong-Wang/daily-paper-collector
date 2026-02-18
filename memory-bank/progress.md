@@ -13,13 +13,17 @@
 - **Step 2.4** — `ClaudeCodeProvider` in `src/llm/claude_code_provider.py`. Calls `claude` CLI via `asyncio.create_subprocess_exec`, zero API cost via subscription.
 - **Tests** — 4 test files (`test_llm_base.py`, `test_llm_openai.py`, `test_llm_claude.py`, `test_llm_claude_code.py`). All tests pass. All mocked — no real API calls.
 
+### Phase 3: ArXiv Fetcher (Done)
+- **Step 3.1** — `ArxivFetcher` in `src/fetcher/arxiv_fetcher.py`. Fetches papers from configurable arXiv categories via the `arxiv` Python library. Python-side date filtering (arXiv API sorts but doesn't filter by date). Version suffix stripping from arxiv_id (e.g., `v2`). Cross-category deduplication. Uses `asyncio.to_thread` to avoid blocking the event loop.
+- **Tests** — `tests/test_fetcher.py` with 10 tests covering: date filtering, cutoff_days parameter, cross-category deduplication, version stripping, field extraction, and edge cases. All mocked — no real arXiv API calls.
+
 ## Next Up
 
 ### Phase 1: Database Layer (`src/store/database.py`)
 - Steps 1.1–1.4: PaperStore class with schema init, Paper CRUD, Interest CRUD, Match/Summary/Report CRUD
 
-### Phase 3: ArXiv Fetcher
-- Step 3.1: ArxivFetcher with Python-side date filtering
+### Phase 4: Embedding System (`src/matcher/embedder.py`)
+- Steps 4.1–4.2: Embedder class with sentence-transformers + cosine similarity matching
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).

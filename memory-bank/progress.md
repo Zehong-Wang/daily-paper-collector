@@ -107,12 +107,45 @@
   - TestFileVerification (8 tests — `.env.example` exists + has 4 keys, `.gitignore` has `.env` + `data/`, `templates/email_template.md` exists + has 7 placeholders + has 3 sections)
 - **Full test suite**: 271 tests pass (255 existing + 16 new). Phase 14 files pass `ruff check` and `ruff format --check` with zero issues.
 
+---
+
+## Post-Phase Features
+
+### Feature 1: Harden ClaudeCodeProvider as Primary LLM Provider (Done)
+
+Based on `memory-bank/feature-implementation-1.md` (FR-1 through FR-8).
+
+**Goal:** Make `ClaudeCodeProvider` production-ready and set it as the default LLM provider for zero marginal cost.
+
+**Changes:**
+- **`src/llm/claude_code_provider.py`** — Major rewrite (51 → 98 lines):
+  - FR-1: System prompt via `--system-prompt` CLI flag (replaces prompt concatenation)
+  - FR-2: Structured JSON output via `--output-format json` envelope parsing
+  - FR-3: Configurable subprocess timeout (default 120s) via `asyncio.wait_for`; kills process on timeout
+  - FR-4: Retry with exponential backoff (1s, 2s, 4s), up to `max_retries` (default 3) on `RuntimeError`; no retry on `ValueError`
+  - FR-6: CLI availability check via `shutil.which()` in `__init__`; raises `RuntimeError` if not found
+  - FR-8: `--no-session-persistence` flag to prevent session file accumulation
+  - Method structure: `complete()` → `_run_cli()` (retry) → `_execute_subprocess()` (timeout + subprocess)
+- **`config/config.yaml`** — FR-7: Default provider switched from `"openai"` to `"claude_code"`. Added 3 new settings: `timeout: 120`, `max_retries: 3`, `max_concurrent: 2`.
+- **`src/pipeline.py`** — FR-5: Reads `max_concurrent` from the active LLM provider's config section (defaults to 5 for API providers, 2 for `claude_code`). Passes it to `ranker.rerank(max_concurrent=self.max_concurrent)`.
+- **`tests/test_llm_claude_code.py`** — Expanded from 8 to 24 tests across 5 test classes:
+  - TestClaudeCodeProviderInit (4 tests — defaults, custom values, CLI not found, CLI found)
+  - TestClaudeCodeComplete (10 tests — envelope parsing, `--system-prompt` flag, `--output-format json`, `--no-session-persistence`, stdin prompt, nonzero exit, timeout kill, raw stdout fallback, CLI args order)
+  - TestClaudeCodeRetry (5 tests — transient failure recovery, retry exhaustion, no retry on JSON parse error, backoff delays, single retry config)
+  - TestClaudeCodeCompleteJSON (5 tests — envelope JSON parsing, markdown fence fallback, invalid JSON, system instruction injection, default system)
+- **`memory-bank/architecture.md`** — Updated ClaudeCodeProvider section, pipeline section, config description, and Key Design Decisions table.
+
+**Test results:** 24/24 new tests pass, all existing runnable tests unaffected. `ruff check` and `ruff format` clean.
+
+---
+
 ## All Phases Complete
 
-The implementation plan (Phases 0–14) is fully implemented. The project is feature-complete with:
-- 271 tests across 16 test files
+The implementation plan (Phases 0–14) is fully implemented, plus Feature 1. The project is feature-complete with:
+- 287 tests across 16 test files (271 original + 16 net new from expanding test_llm_claude_code.py from 8 to 24)
 - Full error handling at all external service boundaries
 - `.env.example`, `.gitignore`, and email template verified
+- `claude_code` as default LLM provider (zero marginal cost)
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).

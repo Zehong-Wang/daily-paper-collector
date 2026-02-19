@@ -24,6 +24,11 @@ class DailyPipeline:
         self.email_sender = EmailSender(config)
         self.logger = logging.getLogger(__name__)
 
+        # Read max_concurrent from the active LLM provider's config
+        provider_name = config.get("llm", {}).get("provider", "openai")
+        provider_config = config.get("llm", {}).get(provider_name, {})
+        self.max_concurrent = provider_config.get("max_concurrent", 5)
+
     async def run(self) -> dict:
         """Execute the full daily pipeline. Return a summary dict.
 
@@ -84,7 +89,7 @@ class DailyPipeline:
         self.logger.info("Embedding matcher found %d candidates", len(candidates))
 
         # Step 7: Re-rank
-        ranked = await self.ranker.rerank(candidates, interests)
+        ranked = await self.ranker.rerank(candidates, interests, max_concurrent=self.max_concurrent)
         self.logger.info("LLM re-ranker selected %d papers", len(ranked))
 
         # Step 8: Save matches

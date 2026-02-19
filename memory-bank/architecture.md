@@ -20,7 +20,7 @@ Streamlit GUI runs separately, reading from the same SQLite DB and invoking the 
 - `setup_logging(level)` — Configures root logger. Called once in `main.py` and `gui/app.py`.
 
 ### `config/config.yaml` — Runtime Configuration
-Sections: `arxiv` (categories, max_results), `matching` (model, top_n, top_k, threshold), `llm` (provider + sub-configs for openai/claude/claude_code), `email` (SMTP settings), `scheduler` (cron), `database` (path), `gui` (port).
+Sections: `arxiv` (categories, max_results), `matching` (model, top_n, top_k, threshold), `llm` (provider [default: `claude_code`] + sub-configs for openai/claude/claude_code [with timeout, max_retries, max_concurrent]), `email` (SMTP settings), `scheduler` (cron), `database` (path), `gui` (port).
 
 ### `src/llm/base.py` — LLMProvider ABC
 Abstract base class defining the LLM contract:
@@ -45,11 +45,14 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 - `complete_json()` appends "Respond with valid JSON only." to system, then strips markdown code fences (```` ```json ... ``` ````) before parsing. Claude models sometimes wrap JSON in code blocks even when instructed not to.
 
 ### `src/llm/claude_code_provider.py` — ClaudeCodeProvider
-- Calls `claude` CLI via `asyncio.create_subprocess_exec` with `--print --model <model>`.
-- Zero API cost — uses existing Claude Code subscription.
-- System message is prepended to the user prompt (CLI has no separate system parameter).
-- `complete_json()` strips markdown code fences before parsing, same as ClaudeProvider.
-- Raises `RuntimeError` on non-zero exit code with stderr details.
+- **Default LLM provider** — zero API cost via existing Claude Code subscription.
+- Calls `claude` CLI via `asyncio.create_subprocess_exec` with flags: `--print`, `--model <model>`, `--output-format json`, `--no-session-persistence`.
+- `__init__(config)` — Reads `cli_path` (default `"claude"`), `model` (default `"sonnet"`), `timeout` (default 120s), `max_retries` (default 3). Validates CLI availability via `shutil.which(cli_path)` — raises `RuntimeError` if CLI not found.
+- `complete(prompt, system)` — Calls `_run_cli()` (with retry), parses the JSON envelope from `--output-format json` to extract `envelope["result"]`. Falls back to raw stdout if envelope parsing fails. System prompt passed via `--system-prompt` CLI flag (not concatenated with user prompt).
+- `complete_json(prompt, system)` — Calls `complete()`, strips markdown code fences as fallback, parses result as JSON. Raises `ValueError` on invalid JSON (not retried).
+- `_run_cli(prompt, system)` — Retry loop: up to `max_retries` attempts with exponential backoff (1s, 2s, 4s) on `RuntimeError`. Does not retry `ValueError`.
+- `_execute_subprocess(prompt, system)` — Builds CLI command, runs subprocess with `asyncio.wait_for(timeout=self.timeout)`. On timeout: kills process, raises `RuntimeError`. On non-zero exit: raises `RuntimeError` with stderr.
+- Config options in `config["llm"]["claude_code"]`: `cli_path`, `model`, `timeout`, `max_retries`, `max_concurrent`.
 
 ### `src/fetcher/arxiv_fetcher.py` — ArxivFetcher
 - Fetches daily papers from user-configured arXiv categories using the `arxiv` Python library.
@@ -198,13 +201,14 @@ Central orchestrator that wires all components together and executes the daily p
   - `InterestManager(store, embedder)` — interest management
   - `ReportGenerator(llm)` — Markdown report generation
   - `EmailSender(config)` — SMTP email delivery
+  - Also reads `max_concurrent` from the active LLM provider's config (defaults to 5; `claude_code` uses 2).
 - `run() -> dict` — Async method executing the 12-step pipeline:
   1. **Fetch** — `fetcher.fetch_today()` retrieves papers from arXiv
   2. **Save** — `store.save_papers()` persists with deduplication, returns only new papers
   3. **Embed** — `embedder.compute_embeddings(new_papers, store)` computes abstract embeddings
   4. **Check interests** — `interest_mgr.get_interests_with_embeddings()`; if empty, generates general report only and returns early
   5. **Match** — `store.get_papers_by_date_with_embeddings(run_date)` gets today's embedded papers, then `embedder.find_similar()` computes top-N candidates
-  6. **Re-rank** — `ranker.rerank(candidates, interests)` scores via LLM for top-K
+  6. **Re-rank** — `ranker.rerank(candidates, interests, max_concurrent=self.max_concurrent)` scores via LLM for top-K
   7. **Save matches** — `store.save_match()` per ranked paper
   8. **General report** — `report_gen.generate_general(new_papers, run_date)`
   9. **Specific report** — `report_gen.generate_specific(ranked, interests, run_date)`
@@ -323,8 +327,14 @@ A reference Markdown template showing the expected email report structure with p
 | Async LLM interface | All providers use `async def` | Enables concurrent re-ranking (asyncio.gather) |
 | Factory pattern | `create_llm_provider()` with lazy imports | Avoids loading unused SDKs (openai vs anthropic) |
 | JSON fence stripping | Regex strip of ````json ... ```` | Claude models wrap JSON in code blocks despite instructions |
-| Claude CLI integration | subprocess via `asyncio.create_subprocess_exec` | Zero cost, leverages existing subscription |
-| System message in CLI | Prepended to prompt | CLI has no separate system parameter |
+| Claude CLI integration | subprocess via `asyncio.create_subprocess_exec` with `--output-format json` envelope | Zero cost, leverages existing subscription; structured envelope enables reliable output parsing |
+| System message in CLI | `--system-prompt` CLI flag | Preserves semantic separation between system instructions and user content |
+| CLI timeout | `asyncio.wait_for(timeout=self.timeout)` with process kill | Prevents hung CLI from blocking the pipeline indefinitely |
+| CLI retry | Exponential backoff (1s, 2s, 4s) on `RuntimeError`, no retry on `ValueError` | Handles transient network/rate-limit failures; content errors are not retryable |
+| CLI availability check | `shutil.which(cli_path)` in `__init__` | Fail-fast with clear error instead of cryptic subprocess failures at runtime |
+| Session persistence | `--no-session-persistence` flag | Prevents session file accumulation during automated pipeline runs |
+| Default provider | `claude_code` in `config.yaml` | Zero marginal LLM cost; other providers remain available via config switch |
+| Provider-specific concurrency | `max_concurrent` in provider config, read by pipeline | Claude Code subscription has lower rate limits than API providers; default 2 for `claude_code`, 5 for others |
 | ArXiv date filtering | Python-side filter after fetch | arXiv API sorts by SubmittedDate but doesn't filter by date |
 | ArXiv async wrapping | `asyncio.to_thread` around sync `arxiv.Client` | Avoids blocking the event loop; arxiv lib is synchronous |
 | ArXiv ID normalization | Regex strip `v\d+$` suffix | Ensures consistent IDs for deduplication and DB storage |

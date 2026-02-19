@@ -16,7 +16,7 @@ matching:
 
 # LLM settings
 llm:
-  provider: "openai"         # openai | claude | claude_code
+  provider: "claude_code"    # openai | claude | claude_code
   openai:
     model: "gpt-4o-mini"
     api_key_env: "OPENAI_API_KEY"
@@ -24,8 +24,11 @@ llm:
     model: "claude-sonnet-4-5-20250929"
     api_key_env: "ANTHROPIC_API_KEY"
   claude_code:
-    cli_path: "claude"       # path to claude CLI
-    model: "sonnet"
+    cli_path: "claude"       # path to claude CLI binary
+    model: "sonnet"          # claude model shortname
+    timeout: 120             # seconds per CLI call
+    max_retries: 3           # retry attempts for transient failures
+    max_concurrent: 2        # concurrent calls for re-ranking
 
 # Email settings
 email:

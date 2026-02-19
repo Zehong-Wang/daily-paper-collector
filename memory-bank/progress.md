@@ -42,10 +42,17 @@
 - **Step 8.1** — `EmailSender` class in `src/email/sender.py`. SMTP email delivery with Markdown → HTML → CSS-inline pipeline. Reads SMTP config (host, port) from `config["email"]["smtp"]` and credentials from environment variables. `render_markdown_to_html()` converts Markdown to HTML via the `markdown` library (with `tables` + `fenced_code` extensions), wraps in an HTML template with a `<style>` block (body font, headings, tables, links, code), then inlines CSS via `premailer.transform()`. `send()` combines general + specific reports, renders to HTML, builds a `MIMEMultipart` message, and sends via `smtplib.SMTP` (starttls + login + send_message) wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
 - **Tests** — `tests/test_email_sender.py` with 22 tests across 4 test classes: TestInit (6 tests — SMTP settings, env credentials, addresses, subject prefix, custom prefix, multiple recipients), TestRenderMarkdownToHtml (7 tests — heading, bold, inline CSS, table, link, horizontal rule, bullet list), TestBuildEmail (6 tests — MIME type, subject/from/to headers, multiple recipients, HTML payload), TestSend (5 tests — SMTP starttls/login/send_message calls, correct subject, report content merging, no real email sent, custom host/port). All mocked — no real SMTP connections.
 
+### Phase 9: Paper Summarizer (Done)
+- **Step 9.1** — `PaperSummarizer` class in `src/summarizer/paper_summarizer.py`. Fetches full paper text from ar5iv HTML pages via `requests` + `BeautifulSoup` with `lxml` parser. Looks for `<article>` tag first, falls back to `ltx_document` → `ltx_page_main` → body. Extracts text from `<p>`, `<h2>`, `<h3>` tags, truncates to 15,000 characters for LLM context safety. Two summarization modes: "brief" (1-2 paragraphs on contributions + methodology) and "detailed" (structured: Motivation, Method, Experiments, Conclusions, Limitations). Cache-first: checks `store.get_summary()` before calling LLM. Falls back to abstract if ar5iv fetch fails. Caches results via `store.save_summary()` with LLM provider name. Includes `_get_paper_by_id()` helper for integer-id lookup (PaperStore only has `get_paper_by_arxiv_id`).
+- **Tests** — `tests/test_summarizer.py` with 19 tests across 3 test classes: TestFetchPaperText (8 tests — `<article>` extraction, heading extraction, `ltx_document`/`ltx_page_main` fallbacks, HTTP error, connection error, 15K truncation, empty tag skipping), TestSummarize (9 tests — cache hit skips LLM, brief/detailed prompt construction, cache persistence with provider name, abstract fallback on fetch failure, nonexistent paper ValueError, title in prompt, system prompt, separate brief/detailed caching), TestGetPaperById (2 tests — found/not found). All use real `PaperStore` with temp DBs and concrete `MockLLMProvider` — no real API calls or HTTP requests.
+
 ## Next Up
 
-### Phase 9: Paper Summarizer (`src/summarizer/paper_summarizer.py`)
-- Step 9.1: ar5iv HTML fetching, text extraction, LLM summarization with caching
+### Phase 5: Interest Manager (`src/interest/manager.py`)
+- Step 5.1: Interest CRUD with auto-fetch abstracts from DB/arXiv + embedding recomputation
+
+### Phase 10: Pipeline Orchestrator (`src/pipeline.py`)
+- Step 10.1: DailyPipeline wiring all components together
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).
@@ -56,6 +63,7 @@
 - `ClaudeProvider` and `ClaudeCodeProvider` both strip markdown code fences (```json ... ```) from JSON responses since these models may wrap JSON in code blocks.
 - The factory function uses lazy imports to avoid loading unused SDK dependencies.
 - Embedder tests use a module-scoped fixture (`scope="module"`) so the ~80MB model is loaded only once across all test functions. The `find_similar` tests use synthetic normalized vectors via `_make_normalized_vector()` helper — no model loading needed for those.
+- PaperSummarizer tests use real `PaperStore` (not mocks) because `_get_paper_by_id()` accesses `store._get_conn()` directly. A concrete `MockLLMProvider` class (with `call_count`, `last_prompt`, `last_system` tracking) is used instead of `MagicMock` for cleaner async behavior. HTTP requests are patched at the module level (`src.summarizer.paper_summarizer.requests.get`).
 - PaperStore tests use `tmp_path` for isolated databases — no cleanup needed, no interference between tests. Each test class covers one CRUD domain (papers, interests, matches, summaries, reports).
 - LLMRanker tests use concrete mock `LLMProvider` subclasses (not `MagicMock`) for cleaner async behavior. `MockLLMProviderConcurrency` uses an `asyncio.Lock` counter + `asyncio.sleep(0.05)` to verify the semaphore limits parallel execution. Tests use `max_concurrent=1` when deterministic ordering matters (e.g., the descending sort test with a `VaryingScoreLLM`).
 - ReportGenerator tests also use concrete mock `LLMProvider` subclasses. The mock dispatches canned responses based on prompt keywords ("trending"/"emerging" vs "noteworthy"/"impactful"). `generate_specific` is tested to confirm it makes zero LLM calls — it only formats pre-scored data.

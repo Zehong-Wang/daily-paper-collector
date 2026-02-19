@@ -158,6 +158,19 @@ SMTP email delivery with a Markdown → HTML → CSS-inline rendering pipeline.
 
 Used by: `DailyPipeline` (Phase 10) for delivering the daily email after report generation.
 
+### `src/summarizer/paper_summarizer.py` — PaperSummarizer
+GUI-only component for on-demand paper summarization. Not part of the daily automated pipeline.
+
+- `__init__(llm, store)` — Takes an `LLMProvider` instance and a `PaperStore` instance. Uses `logging.getLogger(__name__)`.
+- `fetch_paper_text(ar5iv_url) -> str` — Fetches ar5iv HTML page via `requests.get(url, timeout=30)`. Parses with `BeautifulSoup(html, "lxml")`. Content extraction priority: `<article>` tag → class `ltx_document` → class `ltx_page_main` → `<body>` → entire soup. Extracts text from all `<p>`, `<h2>`, `<h3>` tags within the found container. Joins with double newlines. Truncates to 15,000 characters (LLM context limit safety). Raises `RuntimeError` on HTTP errors or connection failures (wraps `requests.RequestException`).
+- `summarize(paper_id, mode="brief") -> str` — Async entry point. Cache-first: checks `store.get_summary(paper_id, mode)` and returns cached content immediately if found. Retrieves paper by integer ID via `_get_paper_by_id()`. Attempts to fetch full text from ar5iv; on `RuntimeError`, falls back to the paper's abstract. Builds a mode-specific prompt:
+  - `"brief"`: asks for 1-2 paragraphs covering core contributions and methodology.
+  - `"detailed"`: asks for structured sections (Motivation, Method, Experiments, Conclusions, Limitations).
+  Calls `llm.complete(prompt, system="You are a scientific paper summarizer...")`. Saves the result to cache via `store.save_summary()` with the LLM provider class name. Raises `ValueError` if `paper_id` is not found in the database.
+- `_get_paper_by_id(paper_id) -> dict | None` — Queries papers table by integer `id` (PaperStore only exposes `get_paper_by_arxiv_id`). Accesses `store._get_conn()` directly, deserializes `authors` and `categories` from JSON. Returns `None` if not found.
+
+Used by: Streamlit GUI Papers page (Phase 12) for on-demand brief/detailed summaries. Summaries are cached in the `summaries` table to avoid redundant LLM calls.
+
 ---
 
 ## Not Yet Implemented
@@ -165,7 +178,6 @@ Used by: `DailyPipeline` (Phase 10) for delivering the daily email after report 
 | File | Phase | Purpose |
 |------|-------|---------|
 | `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
-| `src/summarizer/paper_summarizer.py` | 9 | ar5iv HTML parsing + LLM summarization (GUI-only) |
 | `src/pipeline.py` | 10 | DailyPipeline orchestrator |
 | `src/main.py` | 11 | CLI entry point (--mode scheduler\|run) |
 | `src/scheduler/scheduler.py` | 11 | APScheduler CronTrigger wrapper |
@@ -202,3 +214,8 @@ Used by: `DailyPipeline` (Phase 10) for delivering the daily email after report 
 | Email CSS inlining | `premailer.transform()` after wrapping in HTML template | Most email clients strip `<style>` tags; inline styles ensure consistent rendering |
 | SMTP in thread | `asyncio.to_thread(self._send_smtp, msg)` | `smtplib` is synchronous; wrapping in a thread avoids blocking the async event loop |
 | Env-based credentials | Username/password read from env vars at init time via `os.environ.get` | Keeps secrets out of config files; follows 12-factor app principle |
+| ar5iv content extraction priority | `<article>` → `ltx_document` → `ltx_page_main` → body | ar5iv pages use different structures; cascade handles all observed layouts |
+| Text truncation at 15K chars | `full_text[:15000]` after joining paragraphs | Prevents exceeding LLM context limits; 15K chars ≈ 4K tokens, leaves room for prompt overhead |
+| Cache-first summarization | Check `store.get_summary()` before calling LLM | Avoids redundant LLM calls for previously summarized papers; significant cost savings |
+| Abstract fallback on fetch failure | Catch `RuntimeError` from `fetch_paper_text`, use abstract | Ensures summarization always works even if ar5iv is unavailable or returns errors |
+| `_get_paper_by_id` via store's `_get_conn` | Direct SQL query through `store._get_conn()` | PaperStore only has `get_paper_by_arxiv_id`; avoids modifying the store API for a single consumer |

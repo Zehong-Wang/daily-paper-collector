@@ -46,13 +46,19 @@
 - **Step 9.1** — `PaperSummarizer` class in `src/summarizer/paper_summarizer.py`. Fetches full paper text from ar5iv HTML pages via `requests` + `BeautifulSoup` with `lxml` parser. Looks for `<article>` tag first, falls back to `ltx_document` → `ltx_page_main` → body. Extracts text from `<p>`, `<h2>`, `<h3>` tags, truncates to 15,000 characters for LLM context safety. Two summarization modes: "brief" (1-2 paragraphs on contributions + methodology) and "detailed" (structured: Motivation, Method, Experiments, Conclusions, Limitations). Cache-first: checks `store.get_summary()` before calling LLM. Falls back to abstract if ar5iv fetch fails. Caches results via `store.save_summary()` with LLM provider name. Includes `_get_paper_by_id()` helper for integer-id lookup (PaperStore only has `get_paper_by_arxiv_id`).
 - **Tests** — `tests/test_summarizer.py` with 19 tests across 3 test classes: TestFetchPaperText (8 tests — `<article>` extraction, heading extraction, `ltx_document`/`ltx_page_main` fallbacks, HTTP error, connection error, 15K truncation, empty tag skipping), TestSummarize (9 tests — cache hit skips LLM, brief/detailed prompt construction, cache persistence with provider name, abstract fallback on fetch failure, nonexistent paper ValueError, title in prompt, system prompt, separate brief/detailed caching), TestGetPaperById (2 tests — found/not found). All use real `PaperStore` with temp DBs and concrete `MockLLMProvider` — no real API calls or HTTP requests.
 
+### Phase 5: Interest Manager (Done)
+- **Step 5.1** — `InterestManager` class in `src/interest/manager.py`. CRUD operations for three interest types (keyword, paper, reference_paper) with automatic embedding computation on add/update. Three-tier auto-fetch for paper abstracts: (1) check DB via `store.get_paper_by_arxiv_id`, (2) fetch from arXiv API via `arxiv.Search(id_list=...)`, (3) fall back to using arxiv_id as text with a warning. `recompute_all_embeddings()` for model changes. All methods delegate storage to `PaperStore` and embedding to `Embedder`.
+- **Tests** — `tests/test_interest_manager.py` with 16 tests across 6 test classes: TestAddKeyword (4 tests — returns int ID, creates interest in store, computes 384-dim embedding, description support), TestAddPaper (5 tests — with description, computes embedding, auto-fetch from DB, auto-fetch from arXiv via mock, fallback to ID), TestAddReferencePaper (2 tests — with description, auto-fetch from DB), TestUpdateAndRemove (2 tests — update changes value+embedding, remove deletes), TestRecomputeAll (1 test), TestFetchAbstractFromArxiv (3 tests — success, no results, exception). Uses real `PaperStore` + real `Embedder` (module-scoped fixture); arXiv API calls mocked.
+
+### Phase 10: Pipeline Orchestrator (Done)
+- **Step 10.1** — `DailyPipeline` class in `src/pipeline.py`. Wires all 8 components together: `PaperStore`, `ArxivFetcher`, `Embedder`, `LLMProvider` (via factory), `LLMRanker`, `InterestManager`, `ReportGenerator`, `EmailSender`. The `run()` method executes the 12-step daily pipeline: fetch → save → embed → check interests → match today's papers → re-rank → save matches → generate general report → generate specific report → send email (if enabled) → save report → return summary dict. Two code paths: (a) with interests — full matching + ranking + both reports, (b) without interests — skip matching, generate general report only. Email failures are caught and logged without crashing the pipeline.
+- **Tests** — `tests/test_pipeline.py` with 8 tests across 2 test classes: TestDailyPipelineFullRun (7 tests — full happy path verifying all component calls, no-interests skips matching, email disabled skips sending, email failure doesn't crash, save_match called per ranked paper, save_report called once with correct args, no-interests still saves general report), TestDailyPipelineInit (1 test — verifies all components instantiated). All components mocked — no real API calls, no real DB (except PaperStore which uses tmp_path).
+
 ## Next Up
 
-### Phase 5: Interest Manager (`src/interest/manager.py`)
-- Step 5.1: Interest CRUD with auto-fetch abstracts from DB/arXiv + embedding recomputation
-
-### Phase 10: Pipeline Orchestrator (`src/pipeline.py`)
-- Step 10.1: DailyPipeline wiring all components together
+### Phase 11: Scheduler and CLI Entry Points
+- Step 11.1: `PipelineScheduler` in `src/scheduler/scheduler.py`
+- Step 11.2: CLI entry point in `src/main.py` + `scripts/run_pipeline.py`
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).

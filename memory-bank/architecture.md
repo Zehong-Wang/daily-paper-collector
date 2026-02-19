@@ -171,14 +171,55 @@ GUI-only component for on-demand paper summarization. Not part of the daily auto
 
 Used by: Streamlit GUI Papers page (Phase 12) for on-demand brief/detailed summaries. Summaries are cached in the `summaries` table to avoid redundant LLM calls.
 
+### `src/interest/manager.py` — InterestManager
+Manages the three types of user interests (keyword, paper, reference_paper) with automatic embedding computation.
+
+- `__init__(store, embedder)` — Takes a `PaperStore` and an `Embedder` instance. Uses `logging.getLogger(__name__)`.
+- `add_keyword(keyword, description=None) -> int` — Saves a keyword interest to the store, computes its embedding (using `"{keyword}: {description}"` if description provided, else just `"{keyword}"`), stores the embedding blob, returns the new ID.
+- `add_paper(arxiv_id, description=None) -> int` — Saves a past-paper interest. If no description provided, auto-fetches the abstract via a 3-tier lookup: (1) check DB via `store.get_paper_by_arxiv_id`, (2) fetch from arXiv API via `_fetch_abstract_from_arxiv`, (3) fall back to using the arxiv_id string itself (logs a warning). Computes and stores the embedding.
+- `add_reference_paper(arxiv_id, description=None) -> int` — Same auto-fetch logic as `add_paper` but saves with `type="reference_paper"`.
+- `_fetch_abstract_from_arxiv(arxiv_id) -> str | None` — Uses `arxiv.Search(id_list=[arxiv_id])` to fetch a single paper's metadata. Returns the abstract with newlines stripped, or `None` on any failure. Catches all exceptions to avoid crashing the caller.
+- `update_interest(id, value=None, description=None)` — Updates the interest fields in the store, then recomputes and stores a new embedding from the updated text.
+- `remove_interest(id)` — Deletes via `store.delete_interest`.
+- `get_all_interests()`, `get_interests_with_embeddings()` — Delegate to store.
+- `recompute_all_embeddings()` — Iterates all interests, recomputes embeddings. Useful after switching embedding models.
+
+Used by: `DailyPipeline` (Phase 10) to get interests with embeddings for matching. Streamlit GUI Interests page (Phase 12) for CRUD operations.
+
+### `src/pipeline.py` — DailyPipeline
+Central orchestrator that wires all components together and executes the daily paper collection pipeline.
+
+- `__init__(config)` — Instantiates all 8 components from a single config dict:
+  - `PaperStore(config["database"]["path"])` — persistence
+  - `ArxivFetcher(config)` — paper fetching
+  - `Embedder(config)` — embedding computation + similarity matching
+  - `create_llm_provider(config)` — LLM for re-ranking + report generation
+  - `LLMRanker(llm, config)` — second-stage re-ranking
+  - `InterestManager(store, embedder)` — interest management
+  - `ReportGenerator(llm)` — Markdown report generation
+  - `EmailSender(config)` — SMTP email delivery
+- `run() -> dict` — Async method executing the 12-step pipeline:
+  1. **Fetch** — `fetcher.fetch_today()` retrieves papers from arXiv
+  2. **Save** — `store.save_papers()` persists with deduplication, returns only new papers
+  3. **Embed** — `embedder.compute_embeddings(new_papers, store)` computes abstract embeddings
+  4. **Check interests** — `interest_mgr.get_interests_with_embeddings()`; if empty, generates general report only and returns early
+  5. **Match** — `store.get_papers_by_date_with_embeddings(run_date)` gets today's embedded papers, then `embedder.find_similar()` computes top-N candidates
+  6. **Re-rank** — `ranker.rerank(candidates, interests)` scores via LLM for top-K
+  7. **Save matches** — `store.save_match()` per ranked paper
+  8. **General report** — `report_gen.generate_general(new_papers, run_date)`
+  9. **Specific report** — `report_gen.generate_specific(ranked, interests, run_date)`
+  10. **Email** — `email_sender.send()` if `config["email"]["enabled"]`; failures caught and logged
+  11. **Save report** — `store.save_report()` persists both reports
+  12. **Return** — `{"date", "papers_fetched", "new_papers", "matches", "email_sent"}`
+
+Used by: `src/main.py` (Phase 11) in both `--mode run` and `--mode scheduler` modes. `scripts/run_pipeline.py` for CI/CD.
+
 ---
 
 ## Not Yet Implemented
 
 | File | Phase | Purpose |
 |------|-------|---------|
-| `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
-| `src/pipeline.py` | 10 | DailyPipeline orchestrator |
 | `src/main.py` | 11 | CLI entry point (--mode scheduler\|run) |
 | `src/scheduler/scheduler.py` | 11 | APScheduler CronTrigger wrapper |
 | `gui/` | 12 | Streamlit 5-page app |
@@ -219,3 +260,8 @@ Used by: Streamlit GUI Papers page (Phase 12) for on-demand brief/detailed summa
 | Cache-first summarization | Check `store.get_summary()` before calling LLM | Avoids redundant LLM calls for previously summarized papers; significant cost savings |
 | Abstract fallback on fetch failure | Catch `RuntimeError` from `fetch_paper_text`, use abstract | Ensures summarization always works even if ar5iv is unavailable or returns errors |
 | `_get_paper_by_id` via store's `_get_conn` | Direct SQL query through `store._get_conn()` | PaperStore only has `get_paper_by_arxiv_id`; avoids modifying the store API for a single consumer |
+| 3-tier abstract auto-fetch | DB → arXiv API → fallback to ID | Better embedding quality for paper interests without burdening the user; each tier logged for observability |
+| Match only today's papers | `get_papers_by_date_with_embeddings(run_date)` | Avoids re-matching historical papers; focused on daily discovery |
+| No-interest early return | Skip matching, still generate general report | Useful for first-time users who haven't configured interests yet |
+| Email failure resilience | `try/except` around `email_sender.send()` | Email failure should not prevent report saving; the run is still useful |
+| Pipeline top-level imports | All imports at module level in `pipeline.py` | Components are always needed; avoids lazy-import complexity in the orchestrator |

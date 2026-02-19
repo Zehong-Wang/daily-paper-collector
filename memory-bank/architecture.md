@@ -55,7 +55,7 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 - Fetches daily papers from user-configured arXiv categories using the `arxiv` Python library.
 - `__init__(config)` — reads `config["arxiv"]["categories"]` (list of category strings) and `config["arxiv"]["max_results_per_category"]`.
 - `fetch_today(cutoff_days=2)` — async entry point. Iterates over categories, calls `_fetch_category` via `asyncio.to_thread` to avoid blocking the event loop. Deduplicates results across categories. Default `cutoff_days=2` accounts for timezone/indexing delays.
-- `_fetch_category(category, cutoff_date)` — queries `arxiv.Search(query="cat:{category}", sort_by=SubmittedDate)`. The arXiv API sorts but does **not** filter by date, so filtering is done in Python (`published.date() >= cutoff_date`). Strips version suffix from arxiv_id via regex (`2501.12345v2` → `2501.12345`). Strips newlines from title and abstract. Constructs ar5iv URL from arxiv_id.
+- `_fetch_category(category, cutoff_date)` — queries `arxiv.Search(query="cat:{category}", sort_by=SubmittedDate)`. The arXiv API sorts but does **not** filter by date, so filtering is done in Python (`published.date() >= cutoff_date`). Strips version suffix from arxiv_id via regex (`2501.12345v2` → `2501.12345`). Strips newlines from title and abstract. Constructs ar5iv URL from arxiv_id. **Error handling (Phase 14):** wraps the arXiv API calls in `try/except Exception` — on failure, logs the error and returns an empty list for that category so other categories can still succeed.
 - `_deduplicate(papers)` — removes duplicates by arxiv_id, keeping first occurrence. Needed because a paper can appear in multiple categories.
 - Returns list of dicts with keys: `arxiv_id`, `title`, `authors`, `abstract`, `categories`, `published_date`, `pdf_url`, `ar5iv_url`.
 
@@ -154,7 +154,7 @@ SMTP email delivery with a Markdown → HTML → CSS-inline rendering pipeline.
   3. Inlines all CSS via `premailer.transform()` — required because most email clients strip `<style>` tags.
 - `send(general_report, specific_report, ranked_papers, run_date)` — Async entry point. Combines both Markdown reports with a `---` separator, renders to HTML via `render_markdown_to_html()`, builds a MIME message via `_build_email()`, then sends via `_send_smtp()` wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
 - `_build_email(html_content, subject) -> MIMEMultipart` — Constructs a `MIMEMultipart("alternative")` message with Subject, From, To headers and a single `MIMEText("...", "html")` attachment.
-- `_send_smtp(msg)` — Synchronous SMTP sending using `smtplib.SMTP` context manager: `starttls()` → `login()` → `send_message()`. Called from a thread via `asyncio.to_thread`.
+- `_send_smtp(msg)` — Synchronous SMTP sending using `smtplib.SMTP` context manager: `starttls()` → `login()` → `send_message()`. Called from a thread via `asyncio.to_thread`. **Error handling (Phase 14):** wraps SMTP operations in `try/except smtplib.SMTPException` — logs the error and re-raises so the pipeline's existing try/except can handle it gracefully.
 
 Used by: `DailyPipeline` (Phase 10) for delivering the daily email after report generation.
 
@@ -299,6 +299,21 @@ Verifies the full pipeline works when real components are wired together, with o
 
 Used by: `pytest tests/test_integration.py -v`. Part of the full test suite run.
 
+### `tests/test_error_handling.py` — Error Handling & Hardening Tests (Phase 14)
+Verifies that all external-service-facing components handle failures gracefully, and that project scaffolding files are correct.
+
+- **TestArxivFetcherErrorHandling** (3 tests): Tests that `_fetch_category` catches `Exception` (including `ConnectionError`, `RuntimeError`) and returns an empty list for the failing category. If one category fails, papers from other categories are still returned. If all categories fail, returns an empty list without crashing.
+- **TestLLMRankerErrorHandling** (2 tests): Tests that `_score_paper` catches `TimeoutError` and other exceptions, returning `llm_score=0` for the failed paper while other papers are scored normally. Tests that total failure of all LLM calls still returns all papers with score 0.
+- **TestEmailSenderErrorHandling** (3 tests): Tests that `_send_smtp` catches `smtplib.SMTPException` subclasses (`SMTPAuthenticationError`, `SMTPConnectError`, generic `SMTPException`), logs the error, and re-raises so the pipeline can handle it.
+- **TestFileVerification** (8 tests): Asserts `.env.example` exists and contains all 4 required env var keys. Asserts `.gitignore` contains `.env` and `data/`. Asserts `templates/email_template.md` exists with all 7 placeholder tokens and all 3 report sections.
+
+Uses concrete `LLMProvider` subclasses (`FixedScoreLLM`, `TimeoutOnFirstLLM`, `AlwaysFailLLM`) for deterministic async behavior. Email tests use `monkeypatch.setenv` for SMTP credentials.
+
+Used by: `pytest tests/test_error_handling.py -v`. Part of the full test suite run.
+
+### `templates/email_template.md` — Email Reference Template (Phase 14)
+A reference Markdown template showing the expected email report structure with placeholder tokens (`{date}`, `{total_count}`, `{category_breakdown}`, `{trending_topics}`, `{highlight_papers}`, `{specific_content}`, `{related_papers}`). Not used programmatically — the actual email content is built in code by `ReportGenerator.generate_general()` and `ReportGenerator.generate_specific()`. Serves as documentation for the email format.
+
 ---
 
 ## Key Design Decisions
@@ -355,3 +370,6 @@ Used by: `pytest tests/test_integration.py -v`. Part of the full test suite run.
 | Concrete MockLLMProvider in integration | Subclass of `LLMProvider` ABC, not `MagicMock` | Cleaner async behavior; call counters enable verifying LLM usage patterns; keyword dispatch enables testing both ranker and report generator |
 | Synthetic papers for integration | 10 ML papers spanning transformers, RL, GNN, etc. | Enables semantic relevance assertions (transformer papers rank higher for transformer interests) without depending on real arXiv data |
 | Three-level mocking in integration | `ArxivFetcher` (class), `create_llm_provider` (factory), `smtplib.SMTP` (stdlib) | Minimal mocking surface; real DB, real embeddings, real report formatting all exercised |
+| Per-category error isolation | `_fetch_category` catches `Exception`, returns `[]` | One failing arXiv category (network, API error) doesn't block papers from other categories |
+| SMTP error log-and-reraise | `_send_smtp` catches `SMTPException`, logs, re-raises | Pipeline's existing `try/except` around `email_sender.send()` handles it; error is observable in logs |
+| Email template as reference doc | `templates/email_template.md` not used programmatically | Documents expected email format for developers; actual content built by `ReportGenerator` in code |

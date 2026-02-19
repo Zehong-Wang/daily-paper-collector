@@ -45,17 +45,23 @@ class ArxivFetcher:
 
         Uses arxiv.Client() and arxiv.Search to fetch papers sorted by SubmittedDate.
         Filters in Python to only keep papers published on or after cutoff_date.
+        On failure, logs the error and returns an empty list (doesn't fail the whole run).
         """
         self.logger.info(f"Fetching category: {category} (max_results={self.max_results})")
 
-        search = arxiv.Search(
-            query=f"cat:{category}",
-            max_results=self.max_results,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-        )
+        try:
+            search = arxiv.Search(
+                query=f"cat:{category}",
+                max_results=self.max_results,
+                sort_by=arxiv.SortCriterion.SubmittedDate,
+            )
 
-        client = arxiv.Client()
-        results = list(client.results(search))
+            client = arxiv.Client()
+            results = list(client.results(search))
+        except Exception as e:
+            self.logger.error(f"Failed to fetch category {category}: {e}")
+            return []
+
         self.logger.info(f"  {category}: {len(results)} results from API")
 
         papers = []

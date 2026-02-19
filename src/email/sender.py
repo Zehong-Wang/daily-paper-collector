@@ -138,9 +138,7 @@ strong {{
         # Send via SMTP in a thread to avoid blocking the event loop
         await asyncio.to_thread(self._send_smtp, msg)
 
-        self.logger.info(
-            "Email sent successfully to %s", ", ".join(self.to_addresses)
-        )
+        self.logger.info("Email sent successfully to %s", ", ".join(self.to_addresses))
 
     def _build_email(self, html_content: str, subject: str) -> MIMEMultipart:
         """Build the MIME message object."""
@@ -155,8 +153,16 @@ strong {{
         return msg
 
     def _send_smtp(self, msg: MIMEMultipart):
-        """Send the email via SMTP. Called from a thread."""
-        with smtplib.SMTP(self.host, self.port) as server:
-            server.starttls()
-            server.login(self.username, self.password)
-            server.send_message(msg)
+        """Send the email via SMTP. Called from a thread.
+
+        Catches smtplib.SMTPException, logs the error, and re-raises
+        so the caller (pipeline) can handle the failure.
+        """
+        try:
+            with smtplib.SMTP(self.host, self.port) as server:
+                server.starttls()
+                server.login(self.username, self.password)
+                server.send_message(msg)
+        except smtplib.SMTPException as e:
+            self.logger.error(f"SMTP error: {e}")
+            raise

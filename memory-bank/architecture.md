@@ -144,6 +144,20 @@ Markdown report generation for both general (all daily papers) and specific (int
 
 Used by: `DailyPipeline` (Phase 10) for generating both report types after matching.
 
+### `src/email/sender.py` — EmailSender
+SMTP email delivery with a Markdown → HTML → CSS-inline rendering pipeline.
+
+- `__init__(config)` — Reads `config["email"]` sub-dict. Extracts SMTP settings (host, port) from `config["email"]["smtp"]`. Reads username and password from environment variables specified by `smtp.username_env` and `smtp.password_env`. Stores `from_address`, `to_addresses` (list), and `subject_prefix`. Uses `logging.getLogger(__name__)`.
+- `render_markdown_to_html(md_content) -> str` — Three-step rendering pipeline:
+  1. Converts Markdown to HTML via `markdown.markdown()` with `tables` and `fenced_code` extensions.
+  2. Wraps the HTML body in a full HTML template with a `<style>` block defining styles for body (font family, line height, color), headings (h1/h2/h3 sizes), links (color), tables (borders, padding), horizontal rules, and code blocks.
+  3. Inlines all CSS via `premailer.transform()` — required because most email clients strip `<style>` tags.
+- `send(general_report, specific_report, ranked_papers, run_date)` — Async entry point. Combines both Markdown reports with a `---` separator, renders to HTML via `render_markdown_to_html()`, builds a MIME message via `_build_email()`, then sends via `_send_smtp()` wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
+- `_build_email(html_content, subject) -> MIMEMultipart` — Constructs a `MIMEMultipart("alternative")` message with Subject, From, To headers and a single `MIMEText("...", "html")` attachment.
+- `_send_smtp(msg)` — Synchronous SMTP sending using `smtplib.SMTP` context manager: `starttls()` → `login()` → `send_message()`. Called from a thread via `asyncio.to_thread`.
+
+Used by: `DailyPipeline` (Phase 10) for delivering the daily email after report generation.
+
 ---
 
 ## Not Yet Implemented
@@ -151,7 +165,6 @@ Used by: `DailyPipeline` (Phase 10) for generating both report types after match
 | File | Phase | Purpose |
 |------|-------|---------|
 | `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
-| `src/email/sender.py` | 8 | SMTP email with Markdown → HTML → CSS-inline pipeline |
 | `src/summarizer/paper_summarizer.py` | 9 | ar5iv HTML parsing + LLM summarization (GUI-only) |
 | `src/pipeline.py` | 10 | DailyPipeline orchestrator |
 | `src/main.py` | 11 | CLI entry point (--mode scheduler\|run) |
@@ -186,3 +199,6 @@ Used by: `DailyPipeline` (Phase 10) for generating both report types after match
 | Specific report is LLM-free | `generate_specific` only formats pre-scored data | Scores and reasons already computed by `LLMRanker`; no redundant LLM calls |
 | Graceful LLM failure in reports | `_build_trending_topics`/`_build_highlight_papers` catch all exceptions | Report generation succeeds even if LLM is unavailable; error message replaces section content |
 | Primary category = first element | `categories[0]` used for overview breakdown | arXiv lists primary category first; consistent with how papers are categorized |
+| Email CSS inlining | `premailer.transform()` after wrapping in HTML template | Most email clients strip `<style>` tags; inline styles ensure consistent rendering |
+| SMTP in thread | `asyncio.to_thread(self._send_smtp, msg)` | `smtplib` is synchronous; wrapping in a thread avoids blocking the async event loop |
+| Env-based credentials | Username/password read from env vars at init time via `os.environ.get` | Keeps secrets out of config files; follows 12-factor app principle |

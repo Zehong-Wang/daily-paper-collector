@@ -38,10 +38,14 @@
 - **Step 7.2** — `ReportGenerator.generate_specific()`. Formats pre-scored data from the ranker into Markdown — no LLM calls. Numbered list with `llm_score/10` and `llm_reason` for each paper, followed by a "Related Papers" section with authors, categories, abstract preview (first 200 chars), and arXiv links. Handles empty results, string-type authors/categories gracefully.
 - **Tests** — `tests/test_report_generator.py` with 22 tests across 3 test classes: TestGenerateGeneral (9 tests — header with date, total count, category breakdown, trending/highlight sections, LLM call count, empty papers, section headers), TestGenerateSpecific (9 tests — header, paper titles, LLM scores, reasons, related papers, arXiv links, no LLM calls, empty results, authors/categories in related), TestEdgeCases (4 tests — string authors, string categories, LLM failure handling, single-category papers). All mocked — no real LLM API calls.
 
+### Phase 8: Email Sender (Done)
+- **Step 8.1** — `EmailSender` class in `src/email/sender.py`. SMTP email delivery with Markdown → HTML → CSS-inline pipeline. Reads SMTP config (host, port) from `config["email"]["smtp"]` and credentials from environment variables. `render_markdown_to_html()` converts Markdown to HTML via the `markdown` library (with `tables` + `fenced_code` extensions), wraps in an HTML template with a `<style>` block (body font, headings, tables, links, code), then inlines CSS via `premailer.transform()`. `send()` combines general + specific reports, renders to HTML, builds a `MIMEMultipart` message, and sends via `smtplib.SMTP` (starttls + login + send_message) wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
+- **Tests** — `tests/test_email_sender.py` with 22 tests across 4 test classes: TestInit (6 tests — SMTP settings, env credentials, addresses, subject prefix, custom prefix, multiple recipients), TestRenderMarkdownToHtml (7 tests — heading, bold, inline CSS, table, link, horizontal rule, bullet list), TestBuildEmail (6 tests — MIME type, subject/from/to headers, multiple recipients, HTML payload), TestSend (5 tests — SMTP starttls/login/send_message calls, correct subject, report content merging, no real email sent, custom host/port). All mocked — no real SMTP connections.
+
 ## Next Up
 
-### Phase 8: Email Sender (`src/email/sender.py`)
-- Step 8.1: SMTP email with Markdown → HTML → CSS-inline pipeline
+### Phase 9: Paper Summarizer (`src/summarizer/paper_summarizer.py`)
+- Step 9.1: ar5iv HTML fetching, text extraction, LLM summarization with caching
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).

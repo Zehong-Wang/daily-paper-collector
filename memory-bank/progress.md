@@ -59,16 +59,26 @@
 - **Step 11.2** — CLI entry point in `src/main.py` and CI/CD script in `scripts/run_pipeline.py`. `src/main.py` uses `argparse` with `--mode` (`scheduler`|`run`, default `run`) and `--config` (optional path override). Calls `setup_logging()` and `load_config()` at startup, then dispatches to `PipelineScheduler.start()` or `asyncio.run(pipeline.run())`. `scripts/run_pipeline.py` is a standalone entry point for GitHub Actions that adds project root to `sys.path`, loads config, runs the pipeline, and logs a warning if no new papers were fetched.
 - **Tests** — `tests/test_scheduler.py` with 9 tests across 3 test classes: TestPipelineSchedulerInit (2 tests — config storage, BlockingScheduler creation), TestPipelineSchedulerStart (5 tests — cron trigger creation, field parsing for various cron expressions, scheduler.start called), TestPipelineSchedulerRunPipeline (2 tests — pipeline creation+execution, config passing). `tests/test_main.py` with 7 tests across 3 test classes: TestMainRunMode (3 tests — pipeline execution, custom config path, default mode is run), TestMainSchedulerMode (2 tests — scheduler start, config passing), TestRunPipelineScript (2 tests — execution, no-papers warning). All mocked — no real scheduling, no real pipeline execution.
 
+### Phase 12: Streamlit GUI (Done)
+- **Step 12.1** — `gui/app.py` main Streamlit entry with sidebar radio navigation across 5 pages. Three `@st.cache_resource` functions (`get_config`, `get_store`, `get_embedder`) avoid reloading config, recreating DB connections, and reloading the ~80MB sentence-transformer model on every Streamlit rerun. `sys.path.insert` ensures project root is importable. `setup_logging()` called at module top level. `main()` guarded by `if __name__ == "__main__":` so `gui.app` can be imported by page modules (e.g., `interests.py` imports `get_embedder`) without triggering app execution.
+- **Step 12.2** — `gui/pages/dashboard.py`. Three metrics row (Papers Today, Matches Today, total Reports count) via `st.metric`. General and specific report previews (first 1000 chars) from today's report. "Run Pipeline Now" button that creates a `DailyPipeline` instance and runs via `asyncio.run()` with `st.spinner` feedback and `st.rerun()` on completion.
+- **Step 12.3** — `gui/pages/papers.py` + `gui/components/paper_card.py`. Date selector (`st.date_input`), search box (`st.text_input`). Search calls `store.search_papers()`; date mode calls `store.get_papers_by_date()`. Papers displayed in `st.expander` with authors, categories, abstract, arXiv link. Brief/Detailed summary buttons trigger `PaperSummarizer` on demand (cache-first via store). `paper_card.py` is a reusable component for rendering a single paper card.
+- **Step 12.4** — `gui/pages/interests.py`. Lists current interests with type/value/description, embedding status (Y/N), and delete button per row. Delete triggers `store.delete_interest()` + `st.rerun()`. "Add New Interest" form with type selector (`keyword`|`paper`|`reference_paper`), value input, optional description. On submit, creates `InterestManager(store, get_embedder())` and calls the appropriate `add_*` method. The `get_embedder()` import from `gui.app` uses the cached Embedder instance.
+- **Step 12.5** — `gui/pages/reports.py` + `gui/components/report_viewer.py`. Date dropdown from `store.get_all_report_dates()`. General/Specific reports displayed in `st.tabs`. Match results for the selected date shown in expanders with LLM score, embedding score, reason, and abstract preview. `report_viewer.py` provides a simple `render_report()` helper.
+- **Step 12.6** — `gui/pages/settings.py`. Read-only config display (`yaml.dump` in `st.code`). Editable sections: ArXiv categories (`st.text_area`, one per line), LLM provider (`st.selectbox`), email enabled (`st.checkbox`). Save button writes to `config/config.yaml` via `get_project_root()`. Test email button creates an `EmailSender` and sends a test message.
+- **Step 12.7** — `tests/test_gui.py` with 13 tests across 5 test classes using `AppTest.from_file("gui/app.py")`:
+  - TestDashboardPage (3 tests — renders without errors, shows zero metrics on empty DB, has pipeline button)
+  - TestPapersPage (3 tests — empty DB shows "0 papers", has date input + search box, displays papers when data exists)
+  - TestInterestsPage (3 tests — empty DB shows "No interests", has form elements, displays interests when data exists)
+  - TestReportsPage (2 tests — empty DB shows "No reports", displays reports when data exists)
+  - TestSettingsPage (2 tests — renders without errors, has text_area + selectbox + checkbox controls)
+  - Tests patch `src.config.load_config` to inject a test config with a temp DB path. An `autouse` fixture clears `st.cache_resource` before each test to prevent cache leakage between tests. `_RUN_TIMEOUT=30` handles the slow first-run import of sentence_transformers/torch.
+
 ## Next Up
 
-### Phase 12: Streamlit GUI
-- Step 12.1: Main app entry with navigation (`gui/app.py`)
-- Step 12.2: Dashboard page
-- Step 12.3: Papers page with browsing, search, and summarization
-- Step 12.4: Interests management page
-- Step 12.5: Reports page
-- Step 12.6: Settings page
-- Step 12.7: Automated GUI tests with Streamlit AppTest
+### Phase 13: Integration Testing
+- Step 13.1: End-to-end pipeline test with mocked external services
+- Step 13.2: Full test suite execution and coverage
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).

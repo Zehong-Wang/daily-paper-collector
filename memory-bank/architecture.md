@@ -245,13 +245,47 @@ Standalone script for GitHub Actions and other CI/CD environments.
 
 Used by: `python scripts/run_pipeline.py` from GitHub Actions workflows.
 
----
+### `gui/app.py` — Streamlit Main Entry Point
+Main Streamlit entry with sidebar radio navigation across 5 pages (Dashboard, Papers, Interests, Reports, Settings).
 
-## Not Yet Implemented
+- `get_config()` — `@st.cache_resource` cached config loader. Delegates to `load_config()`.
+- `get_store()` — `@st.cache_resource` cached `PaperStore` instance. Avoids recreating DB connections on every Streamlit rerun.
+- `get_embedder()` — `@st.cache_resource` cached `Embedder` instance. Avoids reloading the ~80MB sentence-transformer model on every rerun.
+- `main()` — Sets page config, renders sidebar radio, dynamically imports the selected page module, and calls `render(get_store())`.
+- `sys.path.insert(0, ...)` ensures project root is importable regardless of working directory.
 
-| File | Phase | Purpose |
-|------|-------|---------|
-| `gui/` | 12 | Streamlit 5-page app |
+Used by: `streamlit run gui/app.py`. Page modules import `get_embedder` from here.
+
+### `gui/pages/dashboard.py` — Dashboard Page
+Three metrics row (Papers Today, Matches Today, total Reports) via `st.metric`. Report previews (first 1000 chars) from today's report in General/Specific tabs. "Run Pipeline Now" button creates a `DailyPipeline` and runs via `asyncio.run()` with `st.spinner` feedback.
+
+Used by: `gui/app.py` when page == "Dashboard".
+
+### `gui/pages/papers.py` — Papers Browse & Summarize Page
+Date selector (`st.date_input`) and search box (`st.text_input`). Search calls `store.search_papers()`; date mode calls `store.get_papers_by_date()`. Papers in `st.expander` with authors, categories, abstract, arXiv link. Brief/Detailed summary buttons trigger `PaperSummarizer` on demand (cache-first via store).
+
+Used by: `gui/app.py` when page == "Papers".
+
+### `gui/pages/interests.py` — Interest CRUD Page
+Lists current interests with type/value/description, embedding status (Y/N), and delete button per row. "Add New Interest" form with type selector (`keyword`|`paper`|`reference_paper`), value input, optional description. On submit, creates `InterestManager(store, get_embedder())` and calls the appropriate `add_*` method.
+
+Used by: `gui/app.py` when page == "Interests".
+
+### `gui/pages/reports.py` — Reports Viewer Page
+Date dropdown from `store.get_all_report_dates()`. General/Specific reports in `st.tabs`. Match results for the selected date in expanders with LLM score, embedding score, reason, and abstract preview.
+
+Used by: `gui/app.py` when page == "Reports".
+
+### `gui/pages/settings.py` — Settings Page
+Read-only config display (`yaml.dump` in `st.code`). Editable sections: ArXiv categories (`st.text_area`), LLM provider (`st.selectbox`), email enabled (`st.checkbox`). Save button writes to `config/config.yaml`. Test email button creates an `EmailSender` and sends a test message.
+
+Used by: `gui/app.py` when page == "Settings".
+
+### `gui/components/paper_card.py` — Reusable Paper Card Component
+Renders a single paper in an `st.expander` with title, authors, categories, abstract, and arXiv link. Used by the Papers page.
+
+### `gui/components/report_viewer.py` — Report Rendering Helper
+Simple `render_report(report_markdown)` function that calls `st.markdown()`. Used by the Reports page.
 
 ---
 
@@ -299,3 +333,9 @@ Used by: `python scripts/run_pipeline.py` from GitHub Actions workflows.
 | Cron string parsing | Split 5-field string into `CronTrigger` kwargs | Standard cron format familiar to users; configurable in YAML |
 | Lazy DailyPipeline import in scheduler | `_run_pipeline()` imports `DailyPipeline` inside the method | Avoids circular imports; creates a fresh pipeline instance per run for clean state |
 | Separate CI/CD entry point | `scripts/run_pipeline.py` with `sys.path` manipulation | GitHub Actions can invoke it directly without `pip install -e .`; decoupled from the CLI's argparse |
+| `@st.cache_resource` for config/store/embedder | Three cached singletons in `gui/app.py` | Avoids reloading config, recreating DB connections, and reloading the ~80MB model on every Streamlit rerun |
+| Dynamic page imports | `from gui.pages.X import render` inside `if` branches | Only loads the selected page's module; avoids importing all pages (and their dependencies) upfront |
+| `main()` guard in `gui/app.py` | `if __name__ == "__main__": main()` | Allows page modules to `from gui.app import get_embedder` without triggering the app's `main()` execution |
+| GUI summarization on demand | Brief/Detailed buttons in Papers page | Summaries are expensive (LLM calls); only generated when user explicitly requests them |
+| Cache-resource global scope | `autouse` fixture clears `st.cache_resource` in tests | Streamlit caches are process-global; without clearing, cached config/store from one test leaks into the next |
+| AppTest timeout 30s | `_RUN_TIMEOUT = 30` for `at.run()` | First AppTest run imports sentence_transformers (→ torch), taking ~10s; default 3s is insufficient |

@@ -29,10 +29,15 @@
 - **Step 1.4** — Match CRUD: `save_match`, `get_matches_by_date` (JOIN with papers table, ORDER BY llm_score DESC with NULLS LAST, then embedding_score DESC). Summary CRUD: `save_summary`, `get_summary` (by paper_id + summary_type). Report CRUD: `save_report`, `get_report_by_date`, `get_all_report_dates` (sorted descending).
 - **Tests** — `tests/test_store.py` with 30 tests across 6 test classes: TestSchemaInit (3 tests), TestPaperCRUD (14 tests), TestInterestCRUD (10 tests), TestMatchCRUD (3 tests), TestSummaryCRUD (3 tests), TestReportCRUD (4 tests). All use `tmp_path` fixture for isolated temp DBs. No mocks needed — tests the real SQLite layer.
 
+### Phase 6: LLM Re-ranker (Done)
+- **Step 6.1** — `LLMRanker` class in `src/matcher/ranker.py`. Concurrent LLM re-ranking of embedding-filtered candidates. Uses `asyncio.gather` with `asyncio.Semaphore(max_concurrent)` to limit parallel LLM calls (default 5). Each paper scored by the LLM on a 1-10 scale with a reason. Graceful error handling: scoring failures return `llm_score=0` without crashing the batch. `_format_interests()` builds a readable text block from interest dicts for the LLM prompt.
+- **Tests** — `tests/test_ranker.py` with 13 tests across 4 test classes: TestLLMRankerBasic (7 tests — top_k truncation, LLM field presence, original field preservation, call count per candidate, top_k override, descending sort, empty candidates), TestLLMRankerFailure (2 tests — invalid JSON returns score 0, partial failure doesn't crash), TestLLMRankerConcurrency (2 tests — semaphore respects max_concurrent, default parallelism works), TestFormatInterests (3 tests — keywords with description, mixed types, empty list). All mocked — no real LLM API calls.
+
 ## Next Up
 
-### Phase 5: Interest Manager (`src/interest/manager.py`)
-- Step 5.1: InterestManager with auto-fetch abstracts from DB/arXiv + embedding recomputation
+### Phase 7: Report Generator (`src/report/generator.py`)
+- Step 7.1: General report (overview + trending topics + highlight papers)
+- Step 7.2: Specific report (ranked papers with LLM scores and reasons)
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).
@@ -44,3 +49,4 @@
 - The factory function uses lazy imports to avoid loading unused SDK dependencies.
 - Embedder tests use a module-scoped fixture (`scope="module"`) so the ~80MB model is loaded only once across all test functions. The `find_similar` tests use synthetic normalized vectors via `_make_normalized_vector()` helper — no model loading needed for those.
 - PaperStore tests use `tmp_path` for isolated databases — no cleanup needed, no interference between tests. Each test class covers one CRUD domain (papers, interests, matches, summaries, reports).
+- LLMRanker tests use concrete mock `LLMProvider` subclasses (not `MagicMock`) for cleaner async behavior. `MockLLMProviderConcurrency` uses an `asyncio.Lock` counter + `asyncio.sleep(0.05)` to verify the semaphore limits parallel execution. Tests use `max_concurrent=1` when deterministic ordering matters (e.g., the descending sort test with a `VaryingScoreLLM`).

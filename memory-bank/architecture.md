@@ -119,6 +119,16 @@ Central persistence layer. All data flows through this class — papers, interes
 
 Used by: Every component that touches persistent data — `DailyPipeline`, `InterestManager`, `Embedder.compute_embeddings`, `PaperSummarizer`, all GUI pages.
 
+### `src/matcher/ranker.py` — LLMRanker
+Second stage of the two-stage matching pipeline: LLM-based re-ranking of embedding-filtered candidates.
+
+- `__init__(llm, config)` — Takes an `LLMProvider` instance and reads `config["matching"]["llm_top_k"]` for the default number of results to return. Uses `logging.getLogger(__name__)`.
+- `rerank(candidates, interests, top_k=None, max_concurrent=5) -> list[dict]` — Concurrent re-ranking entry point. Formats interests into a text block, then scores all candidates in parallel using `asyncio.gather` with an `asyncio.Semaphore(max_concurrent)` to limit concurrency. Sorts results by `llm_score` descending and returns the top-K. The `top_k` parameter overrides the config default if provided.
+- `_score_paper(paper, interests_text) -> dict` — Prompts the LLM via `complete_json()` to score a single paper's relevance (1-10 scale) against the formatted interests text. Returns `{"llm_score": float, "llm_reason": str}`. On any exception (invalid JSON, API timeout, etc.), returns `{"llm_score": 0, "llm_reason": "Scoring failed"}` — never crashes the batch.
+- `_format_interests(interests) -> str` — Converts a list of interest dicts into a readable bullet list for the LLM prompt. Each entry formatted as `"- {type}: {value} ({description})"`. Returns `"No interests specified."` for empty lists.
+
+Used by: `DailyPipeline` (Phase 10) as the fine-grained second stage after `Embedder.find_similar()`.
+
 ---
 
 ## Not Yet Implemented
@@ -126,7 +136,6 @@ Used by: Every component that touches persistent data — `DailyPipeline`, `Inte
 | File | Phase | Purpose |
 |------|-------|---------|
 | `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
-| `src/matcher/ranker.py` | 6 | LLM re-ranking with concurrent scoring (asyncio.gather + Semaphore) |
 | `src/report/generator.py` | 7 | Markdown report generation (general + specific) |
 | `src/email/sender.py` | 8 | SMTP email with Markdown → HTML → CSS-inline pipeline |
 | `src/summarizer/paper_summarizer.py` | 9 | ar5iv HTML parsing + LLM summarization (GUI-only) |
@@ -157,3 +166,5 @@ Used by: Every component that touches persistent data — `DailyPipeline`, `Inte
 | JSON serialization for lists | `authors`/`categories` stored as JSON strings | SQLite has no array type; JSON round-trips cleanly via `json.dumps`/`json.loads` |
 | NULLS LAST ordering | `CASE WHEN llm_score IS NULL THEN 1 ELSE 0 END` | Papers with LLM scores ranked above unscored ones in match results |
 | INSERT OR IGNORE dedup | `save_papers` uses `arxiv_id UNIQUE` constraint | Relies on DB-level uniqueness; no pre-query needed for duplicate detection |
+| Concurrent LLM scoring | `asyncio.gather` + `Semaphore(max_concurrent)` | 5-10x faster than sequential for 50 candidates; semaphore prevents API rate-limit issues |
+| Graceful scoring failure | `_score_paper` catches all exceptions, returns score 0 | One failed LLM call should not abort scoring of remaining candidates |

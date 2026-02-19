@@ -214,14 +214,43 @@ Central orchestrator that wires all components together and executes the daily p
 
 Used by: `src/main.py` (Phase 11) in both `--mode run` and `--mode scheduler` modes. `scripts/run_pipeline.py` for CI/CD.
 
+### `src/scheduler/scheduler.py` — PipelineScheduler
+Wraps APScheduler's `BlockingScheduler` to run the daily pipeline on a cron schedule.
+
+- `__init__(config)` — Stores the full config dict. Creates a `BlockingScheduler` instance. Uses `logging.getLogger(__name__)`.
+- `start()` — Parses the 5-field cron string from `config["scheduler"]["cron"]` (format: `"M H day month day_of_week"`), creates a `CronTrigger` with the parsed fields, adds `_run_pipeline` as a job, then calls `scheduler.start()` which blocks forever. Logs the cron expression on start.
+- `_run_pipeline()` — Lazily imports `DailyPipeline` (to avoid circular imports at module load time), instantiates it with the stored config, and runs it synchronously via `asyncio.run(pipeline.run())`. Logs the result.
+
+Used by: `src/main.py` in `--mode scheduler`.
+
+### `src/main.py` — CLI Entry Point
+The primary command-line interface for running the paper collector.
+
+- `main()` — Uses `argparse` with two arguments:
+  - `--mode` (`scheduler`|`run`, default `run`) — `scheduler` starts the cron-based scheduler (blocks forever), `run` executes the pipeline once and exits.
+  - `--config` (optional) — Path to a custom config YAML file; defaults to `config/config.yaml` relative to project root.
+- Calls `setup_logging()` and `load_config(args.config)` at startup (lazy imports from `src.config` inside the function body).
+- In `scheduler` mode: lazily imports `PipelineScheduler`, instantiates, and calls `start()`.
+- In `run` mode: lazily imports `DailyPipeline`, instantiates, and runs via `asyncio.run(pipeline.run())`.
+- All imports are local to `main()` to avoid triggering heavy module loads (e.g., sentence-transformers, openai, anthropic) at import time.
+
+Used by: `python -m src.main --mode run` or `python -m src.main --mode scheduler`.
+
+### `scripts/run_pipeline.py` — CI/CD Entry Point
+Standalone script for GitHub Actions and other CI/CD environments.
+
+- Adds the project root to `sys.path` so `src` and `scripts` packages are importable regardless of working directory.
+- `main()` — Calls `setup_logging()`, `load_config()`, creates a `DailyPipeline`, runs it via `asyncio.run()`, and logs a warning if `result["new_papers"] == 0`.
+- Uses top-level imports (unlike `src/main.py`) since this script is always invoked directly, not imported as a library.
+
+Used by: `python scripts/run_pipeline.py` from GitHub Actions workflows.
+
 ---
 
 ## Not Yet Implemented
 
 | File | Phase | Purpose |
 |------|-------|---------|
-| `src/main.py` | 11 | CLI entry point (--mode scheduler\|run) |
-| `src/scheduler/scheduler.py` | 11 | APScheduler CronTrigger wrapper |
 | `gui/` | 12 | Streamlit 5-page app |
 
 ---
@@ -265,3 +294,8 @@ Used by: `src/main.py` (Phase 11) in both `--mode run` and `--mode scheduler` mo
 | No-interest early return | Skip matching, still generate general report | Useful for first-time users who haven't configured interests yet |
 | Email failure resilience | `try/except` around `email_sender.send()` | Email failure should not prevent report saving; the run is still useful |
 | Pipeline top-level imports | All imports at module level in `pipeline.py` | Components are always needed; avoids lazy-import complexity in the orchestrator |
+| CLI lazy imports | Local imports inside `main()` in `src/main.py` | Avoids loading heavy dependencies (sentence-transformers, openai, anthropic) at import time; only loads what the chosen mode needs |
+| BlockingScheduler | APScheduler `BlockingScheduler` for standalone scheduler mode | Simplest scheduler for a single-process daemon; no background thread complexity |
+| Cron string parsing | Split 5-field string into `CronTrigger` kwargs | Standard cron format familiar to users; configurable in YAML |
+| Lazy DailyPipeline import in scheduler | `_run_pipeline()` imports `DailyPipeline` inside the method | Avoids circular imports; creates a fresh pipeline instance per run for clean state |
+| Separate CI/CD entry point | `scripts/run_pipeline.py` with `sys.path` manipulation | GitHub Actions can invoke it directly without `pip install -e .`; decoupled from the CLI's argparse |

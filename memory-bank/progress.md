@@ -54,11 +54,21 @@
 - **Step 10.1** — `DailyPipeline` class in `src/pipeline.py`. Wires all 8 components together: `PaperStore`, `ArxivFetcher`, `Embedder`, `LLMProvider` (via factory), `LLMRanker`, `InterestManager`, `ReportGenerator`, `EmailSender`. The `run()` method executes the 12-step daily pipeline: fetch → save → embed → check interests → match today's papers → re-rank → save matches → generate general report → generate specific report → send email (if enabled) → save report → return summary dict. Two code paths: (a) with interests — full matching + ranking + both reports, (b) without interests — skip matching, generate general report only. Email failures are caught and logged without crashing the pipeline.
 - **Tests** — `tests/test_pipeline.py` with 8 tests across 2 test classes: TestDailyPipelineFullRun (7 tests — full happy path verifying all component calls, no-interests skips matching, email disabled skips sending, email failure doesn't crash, save_match called per ranked paper, save_report called once with correct args, no-interests still saves general report), TestDailyPipelineInit (1 test — verifies all components instantiated). All components mocked — no real API calls, no real DB (except PaperStore which uses tmp_path).
 
+### Phase 11: Scheduler and CLI Entry Points (Done)
+- **Step 11.1** — `PipelineScheduler` class in `src/scheduler/scheduler.py`. Wraps APScheduler's `BlockingScheduler` with `CronTrigger`. Parses standard 5-field cron strings from `config["scheduler"]["cron"]`. `start()` adds the pipeline job and blocks. `_run_pipeline()` creates a `DailyPipeline` instance and runs it via `asyncio.run()`. Includes logging for scheduler start and pipeline completion.
+- **Step 11.2** — CLI entry point in `src/main.py` and CI/CD script in `scripts/run_pipeline.py`. `src/main.py` uses `argparse` with `--mode` (`scheduler`|`run`, default `run`) and `--config` (optional path override). Calls `setup_logging()` and `load_config()` at startup, then dispatches to `PipelineScheduler.start()` or `asyncio.run(pipeline.run())`. `scripts/run_pipeline.py` is a standalone entry point for GitHub Actions that adds project root to `sys.path`, loads config, runs the pipeline, and logs a warning if no new papers were fetched.
+- **Tests** — `tests/test_scheduler.py` with 9 tests across 3 test classes: TestPipelineSchedulerInit (2 tests — config storage, BlockingScheduler creation), TestPipelineSchedulerStart (5 tests — cron trigger creation, field parsing for various cron expressions, scheduler.start called), TestPipelineSchedulerRunPipeline (2 tests — pipeline creation+execution, config passing). `tests/test_main.py` with 7 tests across 3 test classes: TestMainRunMode (3 tests — pipeline execution, custom config path, default mode is run), TestMainSchedulerMode (2 tests — scheduler start, config passing), TestRunPipelineScript (2 tests — execution, no-papers warning). All mocked — no real scheduling, no real pipeline execution.
+
 ## Next Up
 
-### Phase 11: Scheduler and CLI Entry Points
-- Step 11.1: `PipelineScheduler` in `src/scheduler/scheduler.py`
-- Step 11.2: CLI entry point in `src/main.py` + `scripts/run_pipeline.py`
+### Phase 12: Streamlit GUI
+- Step 12.1: Main app entry with navigation (`gui/app.py`)
+- Step 12.2: Dashboard page
+- Step 12.3: Papers page with browsing, search, and summarization
+- Step 12.4: Interests management page
+- Step 12.5: Reports page
+- Step 12.6: Settings page
+- Step 12.7: Automated GUI tests with Streamlit AppTest
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).
@@ -73,3 +83,5 @@
 - PaperStore tests use `tmp_path` for isolated databases — no cleanup needed, no interference between tests. Each test class covers one CRUD domain (papers, interests, matches, summaries, reports).
 - LLMRanker tests use concrete mock `LLMProvider` subclasses (not `MagicMock`) for cleaner async behavior. `MockLLMProviderConcurrency` uses an `asyncio.Lock` counter + `asyncio.sleep(0.05)` to verify the semaphore limits parallel execution. Tests use `max_concurrent=1` when deterministic ordering matters (e.g., the descending sort test with a `VaryingScoreLLM`).
 - ReportGenerator tests also use concrete mock `LLMProvider` subclasses. The mock dispatches canned responses based on prompt keywords ("trending"/"emerging" vs "noteworthy"/"impactful"). `generate_specific` is tested to confirm it makes zero LLM calls — it only formats pre-scored data.
+- `src/main.py` uses local imports inside `main()` (lazy imports for `load_config`, `setup_logging`, `DailyPipeline`, `PipelineScheduler`). Tests must patch at the definition site (`src.config.setup_logging`, `src.config.load_config`, `src.pipeline.DailyPipeline`, `src.scheduler.scheduler.PipelineScheduler`) rather than at `src.main.*`, because local imports don't create module-level attributes that `unittest.mock.patch` can find.
+- `scripts/run_pipeline.py` uses top-level imports, so its tests patch at `scripts.run_pipeline.*` directly.

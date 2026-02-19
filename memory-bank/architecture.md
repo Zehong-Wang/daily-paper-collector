@@ -287,6 +287,18 @@ Renders a single paper in an `st.expander` with title, authors, categories, abst
 ### `gui/components/report_viewer.py` — Report Rendering Helper
 Simple `render_report(report_markdown)` function that calls `st.markdown()`. Used by the Reports page.
 
+### `tests/test_integration.py` — End-to-End Integration Tests
+Verifies the full pipeline works when real components are wired together, with only external services mocked.
+
+- **Test strategy**: Uses real `PaperStore` (temp SQLite DB), real `Embedder` (real sentence-transformers model producing real 384-dim embeddings), real `InterestManager`, real `LLMRanker`, real `ReportGenerator`, and real `EmailSender`. Only three things are mocked: `ArxivFetcher.fetch_today` (returns 10 synthetic ML papers), `LLMProvider` (concrete `MockLLMProvider` subclass with deterministic responses), and `smtplib.SMTP` (prevents real email sending).
+- **`MockLLMProvider`**: A concrete `LLMProvider` subclass (not `MagicMock`) with call counters. `complete_json()` always returns `{"score": 7, "reason": "Relevant to user interests in machine learning"}`. `complete()` dispatches canned Markdown based on prompt keywords ("trending"/"emerging" → trending topics, "noteworthy"/"impactful" → highlight papers).
+- **`_make_synthetic_papers(count)`**: Generates 10 ML-themed papers with carefully chosen titles and abstracts spanning transformers, reinforcement learning, vision, GNNs, federated learning, self-supervised learning, NAS, and code generation. Designed so embedding similarity tests can verify semantic relevance (e.g., transformer papers rank higher for transformer interests).
+- **`TestEndToEndPipeline`** (6 tests): Full pipeline `run()` with DB state verification, no-interest path, duplicate handling, embedding relevance validation, email content integrity (MIME inspection), and interest-dependent ranking differences.
+- **`TestComponentIntegration`** (4 tests): Targeted integration between pairs of components — store+embedder round-trip, interest manager+embedder embedding quality, ranker with real embedding-filtered candidates, report generator with real pipeline data.
+- **Module-scoped `embedder` fixture**: Avoids reloading the ~80MB model per test. Same pattern as `test_embedder.py` and `test_interest_manager.py`.
+
+Used by: `pytest tests/test_integration.py -v`. Part of the full test suite run.
+
 ---
 
 ## Key Design Decisions
@@ -339,3 +351,7 @@ Simple `render_report(report_markdown)` function that calls `st.markdown()`. Use
 | GUI summarization on demand | Brief/Detailed buttons in Papers page | Summaries are expensive (LLM calls); only generated when user explicitly requests them |
 | Cache-resource global scope | `autouse` fixture clears `st.cache_resource` in tests | Streamlit caches are process-global; without clearing, cached config/store from one test leaks into the next |
 | AppTest timeout 30s | `_RUN_TIMEOUT = 30` for `at.run()` | First AppTest run imports sentence_transformers (→ torch), taking ~10s; default 3s is insufficient |
+| Integration test real embeddings | Only mock external services (arXiv API, LLM APIs, SMTP) | Validates that the embedding pipeline produces semantically meaningful vectors end-to-end; would fail with random embeddings |
+| Concrete MockLLMProvider in integration | Subclass of `LLMProvider` ABC, not `MagicMock` | Cleaner async behavior; call counters enable verifying LLM usage patterns; keyword dispatch enables testing both ranker and report generator |
+| Synthetic papers for integration | 10 ML papers spanning transformers, RL, GNN, etc. | Enables semantic relevance assertions (transformer papers rank higher for transformer interests) without depending on real arXiv data |
+| Three-level mocking in integration | `ArxivFetcher` (class), `create_llm_provider` (factory), `smtplib.SMTP` (stdlib) | Minimal mocking surface; real DB, real embeddings, real report formatting all exercised |

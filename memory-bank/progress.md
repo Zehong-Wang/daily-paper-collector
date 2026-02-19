@@ -74,11 +74,27 @@
   - TestSettingsPage (2 tests — renders without errors, has text_area + selectbox + checkbox controls)
   - Tests patch `src.config.load_config` to inject a test config with a temp DB path. An `autouse` fixture clears `st.cache_resource` before each test to prevent cache leakage between tests. `_RUN_TIMEOUT=30` handles the slow first-run import of sentence_transformers/torch.
 
+### Phase 13: Integration Testing (Done)
+- **Step 13.1** — `tests/test_integration.py` with 10 tests across 2 test classes. End-to-end integration tests using real components (PaperStore, Embedder, InterestManager, LLMRanker, ReportGenerator, EmailSender) with mocked external services (ArxivFetcher, LLM APIs, SMTP). Uses a concrete `MockLLMProvider` subclass (not `MagicMock`) that returns deterministic responses: `{"score": 7, "reason": "..."}` for `complete_json()` and keyword-dispatched canned Markdown for `complete()`.
+  - **TestEndToEndPipeline** (6 tests):
+    - `test_full_pipeline_with_real_components` — Main E2E test: creates temp DB, adds 2 keyword interests with real 384-dim embeddings, mocks ArxivFetcher (10 synthetic ML papers), mocks LLM (deterministic scores), mocks SMTP. Runs full `DailyPipeline.run()`. Verifies: 10 papers in DB with embeddings, matches saved with correct scores, report saved with both general/specific sections, SMTP starttls/login/send_message called, LLM used for both scoring and report generation.
+    - `test_pipeline_with_no_interests` — No-interest early return path: general report generated and saved, specific report empty, matches = 0.
+    - `test_pipeline_handles_duplicate_papers` — Runs pipeline twice with same papers; second run correctly reports 0 new papers, DB still has only 5.
+    - `test_embedding_similarity_relevance` — Validates real embedding quality: transformer papers ranked higher than unrelated papers for a "transformer architectures" interest (at least 2 of 3 transformer papers in top 5).
+    - `test_email_content_integrity` — Captures MIME message via `send_message` side_effect. Verifies subject, from/to headers, HTML payload with inlined CSS.
+    - `test_interest_embedding_affects_matching` — Proves different interests (RL vs GNN) produce different top-3 rankings; RL papers ranked high for RL interest, GNN paper ranked high for GNN interest.
+  - **TestComponentIntegration** (4 tests):
+    - `test_store_embedder_round_trip` — Save → embed → retrieve cycle with real DB and normalized 384-dim embeddings.
+    - `test_interest_manager_and_embedder_integration` — Different interest topics produce different embeddings (cosine similarity < 0.95).
+    - `test_ranker_with_real_candidates` — LLMRanker scores real embedding-filtered candidates; verifies top_k truncation, field preservation, LLM call count.
+    - `test_report_generator_with_real_data` — ReportGenerator produces valid Markdown with correct date headers, category counts, and formatted scores.
+- **Step 13.2** — Full test suite execution: all 10 integration tests pass. Lint (`ruff check`) and format (`ruff format --check`) report zero issues.
+
 ## Next Up
 
-### Phase 13: Integration Testing
-- Step 13.1: End-to-end pipeline test with mocked external services
-- Step 13.2: Full test suite execution and coverage
+### Phase 14: Polish and Hardening
+- Step 14.1: Add error handling and retries
+- Step 14.2: Create `.env.example` and email template
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).
@@ -95,3 +111,7 @@
 - ReportGenerator tests also use concrete mock `LLMProvider` subclasses. The mock dispatches canned responses based on prompt keywords ("trending"/"emerging" vs "noteworthy"/"impactful"). `generate_specific` is tested to confirm it makes zero LLM calls — it only formats pre-scored data.
 - `src/main.py` uses local imports inside `main()` (lazy imports for `load_config`, `setup_logging`, `DailyPipeline`, `PipelineScheduler`). Tests must patch at the definition site (`src.config.setup_logging`, `src.config.load_config`, `src.pipeline.DailyPipeline`, `src.scheduler.scheduler.PipelineScheduler`) rather than at `src.main.*`, because local imports don't create module-level attributes that `unittest.mock.patch` can find.
 - `scripts/run_pipeline.py` uses top-level imports, so its tests patch at `scripts.run_pipeline.*` directly.
+- Integration tests use a module-scoped `embedder` fixture (same pattern as `test_embedder.py` and `test_interest_manager.py`) to avoid reloading the ~80MB model per test. The `MockLLMProvider` is a concrete subclass (not `MagicMock`) with call counters and keyword-dispatched responses — same pattern used by `test_summarizer.py` and `test_ranker.py`.
+- Integration tests mock at three levels: `src.pipeline.ArxivFetcher` (class-level patch so `DailyPipeline.__init__` gets a mock), `src.pipeline.create_llm_provider` (returns `MockLLMProvider` instance), and `smtplib.SMTP` (prevents real SMTP connections). The `Embedder` is NOT mocked — real embeddings are used to verify semantic relevance.
+- The `test_embedding_similarity_relevance` and `test_interest_embedding_affects_matching` tests validate that the embedding model actually produces semantically meaningful vectors — they would fail if embeddings were random. This is the only place in the test suite where embedding quality is verified end-to-end.
+- Email env vars are set via `os.environ.setdefault()` (not `monkeypatch`) so they don't interfere with existing env. `EMAIL_USERNAME` and `EMAIL_PASSWORD` are only needed for tests that exercise `EmailSender.__init__`.

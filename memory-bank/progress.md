@@ -33,11 +33,15 @@
 - **Step 6.1** — `LLMRanker` class in `src/matcher/ranker.py`. Concurrent LLM re-ranking of embedding-filtered candidates. Uses `asyncio.gather` with `asyncio.Semaphore(max_concurrent)` to limit parallel LLM calls (default 5). Each paper scored by the LLM on a 1-10 scale with a reason. Graceful error handling: scoring failures return `llm_score=0` without crashing the batch. `_format_interests()` builds a readable text block from interest dicts for the LLM prompt.
 - **Tests** — `tests/test_ranker.py` with 13 tests across 4 test classes: TestLLMRankerBasic (7 tests — top_k truncation, LLM field presence, original field preservation, call count per candidate, top_k override, descending sort, empty candidates), TestLLMRankerFailure (2 tests — invalid JSON returns score 0, partial failure doesn't crash), TestLLMRankerConcurrency (2 tests — semaphore respects max_concurrent, default parallelism works), TestFormatInterests (3 tests — keywords with description, mixed types, empty list). All mocked — no real LLM API calls.
 
+### Phase 7: Report Generator (Done)
+- **Step 7.1** — `ReportGenerator.generate_general()` in `src/report/generator.py`. Produces a Markdown general report with three sections: (1) "Today's Overview" — total paper count + per-category breakdown computed in pure Python via `collections.Counter` on primary category, (2) "Trending Topics" — LLM identifies 3-5 emerging topics from paper titles, (3) "Highlight Papers" — LLM selects 3-5 noteworthy papers with reasons. Graceful error handling: LLM failures produce an error message instead of crashing.
+- **Step 7.2** — `ReportGenerator.generate_specific()`. Formats pre-scored data from the ranker into Markdown — no LLM calls. Numbered list with `llm_score/10` and `llm_reason` for each paper, followed by a "Related Papers" section with authors, categories, abstract preview (first 200 chars), and arXiv links. Handles empty results, string-type authors/categories gracefully.
+- **Tests** — `tests/test_report_generator.py` with 22 tests across 3 test classes: TestGenerateGeneral (9 tests — header with date, total count, category breakdown, trending/highlight sections, LLM call count, empty papers, section headers), TestGenerateSpecific (9 tests — header, paper titles, LLM scores, reasons, related papers, arXiv links, no LLM calls, empty results, authors/categories in related), TestEdgeCases (4 tests — string authors, string categories, LLM failure handling, single-category papers). All mocked — no real LLM API calls.
+
 ## Next Up
 
-### Phase 7: Report Generator (`src/report/generator.py`)
-- Step 7.1: General report (overview + trending topics + highlight papers)
-- Step 7.2: Specific report (ranked papers with LLM scores and reasons)
+### Phase 8: Email Sender (`src/email/sender.py`)
+- Step 8.1: SMTP email with Markdown → HTML → CSS-inline pipeline
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).
@@ -50,3 +54,4 @@
 - Embedder tests use a module-scoped fixture (`scope="module"`) so the ~80MB model is loaded only once across all test functions. The `find_similar` tests use synthetic normalized vectors via `_make_normalized_vector()` helper — no model loading needed for those.
 - PaperStore tests use `tmp_path` for isolated databases — no cleanup needed, no interference between tests. Each test class covers one CRUD domain (papers, interests, matches, summaries, reports).
 - LLMRanker tests use concrete mock `LLMProvider` subclasses (not `MagicMock`) for cleaner async behavior. `MockLLMProviderConcurrency` uses an `asyncio.Lock` counter + `asyncio.sleep(0.05)` to verify the semaphore limits parallel execution. Tests use `max_concurrent=1` when deterministic ordering matters (e.g., the descending sort test with a `VaryingScoreLLM`).
+- ReportGenerator tests also use concrete mock `LLMProvider` subclasses. The mock dispatches canned responses based on prompt keywords ("trending"/"emerging" vs "noteworthy"/"impactful"). `generate_specific` is tested to confirm it makes zero LLM calls — it only formats pre-scored data.

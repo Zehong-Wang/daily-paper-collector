@@ -129,6 +129,21 @@ Second stage of the two-stage matching pipeline: LLM-based re-ranking of embeddi
 
 Used by: `DailyPipeline` (Phase 10) as the fine-grained second stage after `Embedder.find_similar()`.
 
+### `src/report/generator.py` — ReportGenerator
+Markdown report generation for both general (all daily papers) and specific (interest-matched papers) reports.
+
+- `__init__(llm)` — Takes an `LLMProvider` instance. Uses `logging.getLogger(__name__)`.
+- `generate_general(papers, run_date) -> str` — Builds a complete Markdown general report with three sections:
+  1. **Today's Overview** (`_build_overview`) — Pure Python; uses `collections.Counter` on each paper's primary category (first element of `categories` list). Formats as `"cs.AI: 3 | cs.CL: 4 | ..."`.
+  2. **Trending Topics** (`_build_trending_topics`) — Sends all paper titles to the LLM to identify 3-5 emerging research topics. Catches LLM exceptions gracefully.
+  3. **Highlight Papers** (`_build_highlight_papers`) — Sends paper titles + first 150 chars of abstract + first 3 authors to the LLM to select 3-5 noteworthy papers. Catches LLM exceptions gracefully.
+- `generate_specific(ranked_papers, interests, run_date) -> str` — Formats pre-scored data from the ranker into Markdown. **Does NOT call the LLM.** Two sections:
+  1. Numbered list of ranked papers with `llm_score/10` and `llm_reason`.
+  2. "Related Papers" section with authors, categories, abstract preview (first 200 chars), and arXiv link for each paper.
+  Handles edge cases: empty results, string-type authors/categories (not just lists).
+
+Used by: `DailyPipeline` (Phase 10) for generating both report types after matching.
+
 ---
 
 ## Not Yet Implemented
@@ -136,7 +151,6 @@ Used by: `DailyPipeline` (Phase 10) as the fine-grained second stage after `Embe
 | File | Phase | Purpose |
 |------|-------|---------|
 | `src/interest/manager.py` | 5 | Interest CRUD with auto-fetch abstracts + embedding recomputation |
-| `src/report/generator.py` | 7 | Markdown report generation (general + specific) |
 | `src/email/sender.py` | 8 | SMTP email with Markdown → HTML → CSS-inline pipeline |
 | `src/summarizer/paper_summarizer.py` | 9 | ar5iv HTML parsing + LLM summarization (GUI-only) |
 | `src/pipeline.py` | 10 | DailyPipeline orchestrator |
@@ -168,3 +182,7 @@ Used by: `DailyPipeline` (Phase 10) as the fine-grained second stage after `Embe
 | INSERT OR IGNORE dedup | `save_papers` uses `arxiv_id UNIQUE` constraint | Relies on DB-level uniqueness; no pre-query needed for duplicate detection |
 | Concurrent LLM scoring | `asyncio.gather` + `Semaphore(max_concurrent)` | 5-10x faster than sequential for 50 candidates; semaphore prevents API rate-limit issues |
 | Graceful scoring failure | `_score_paper` catches all exceptions, returns score 0 | One failed LLM call should not abort scoring of remaining candidates |
+| Overview without LLM | `_build_overview` uses `Counter` in pure Python | Category counts are deterministic; no LLM cost for simple aggregation |
+| Specific report is LLM-free | `generate_specific` only formats pre-scored data | Scores and reasons already computed by `LLMRanker`; no redundant LLM calls |
+| Graceful LLM failure in reports | `_build_trending_topics`/`_build_highlight_papers` catch all exceptions | Report generation succeeds even if LLM is unavailable; error message replaces section content |
+| Primary category = first element | `categories[0]` used for overview breakdown | arXiv lists primary category first; consistent with how papers are categorized |

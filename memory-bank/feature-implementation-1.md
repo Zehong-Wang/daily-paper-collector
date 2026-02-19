@@ -9,7 +9,7 @@
 
 ## 1. Problem Statement
 
-The Daily Paper Collector v2 relies on LLM calls in two critical pipeline stages: **LLM re-ranking** (scoring ~50 candidate papers concurrently) and **report generation** (trending topics + highlight papers). The current default provider is OpenAI (`gpt-4o-mini`), which incurs per-token API costs. The Claude API provider also requires a paid API key.
+The Daily Paper Collector relies on LLM calls in two critical pipeline stages: **LLM re-ranking** (scoring ~50 candidate papers concurrently) and **report generation** (trending topics + highlight papers). The current default provider is OpenAI (`gpt-4o-mini`), which incurs per-token API costs. The Claude API provider also requires a paid API key.
 
 The project already includes a `ClaudeCodeProvider` that calls the `claude` CLI via subprocess, leveraging the Claude Code subscription (flat monthly fee, zero marginal cost per call). However, the current implementation is minimal — it lacks timeout handling, retry logic, proper system prompt separation, and structured output support. This makes it unsuitable as a reliable default for daily automated runs.
 

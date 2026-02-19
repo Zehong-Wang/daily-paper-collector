@@ -296,7 +296,7 @@ gui:
 ## 7. Directory Structure
 
 ```
-daily-paper-collector-v2/
+daily-paper-collector/
 ├── config/
 │   └── config.yaml                # main configuration
 ├── src/

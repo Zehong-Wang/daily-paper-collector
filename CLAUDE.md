@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Daily Paper Collector v2 — an automated arXiv paper collection and analysis tool. Fetches daily papers from configurable arXiv categories, performs two-stage intelligent matching (embedding + LLM re-ranking) against user interests, generates Markdown reports, and delivers them via email. Includes a Streamlit GUI for browsing, interest management, and on-demand paper summarization.
+Daily Paper Collector — an automated arXiv paper collection and analysis tool. Fetches daily papers from configurable arXiv categories, performs two-stage intelligent matching (embedding + LLM re-ranking) against user interests, generates Markdown reports, and delivers them via email. Includes a Streamlit GUI for browsing, interest management, and on-demand paper summarization.
 
 **Status:** Design phase. See `daily-paper-collector-document.md` (architecture, schema, interfaces) and `tech-stack.md` (dependency rationale) for the full specification.
 

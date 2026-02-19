@@ -1,4 +1,4 @@
-# Architecture — Daily Paper Collector v2
+# Architecture — Daily Paper Collector
 
 ## High-Level Pipeline
 

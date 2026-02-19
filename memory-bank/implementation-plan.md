@@ -1,4 +1,4 @@
-# Implementation Plan — Daily Paper Collector v2
+# Implementation Plan — Daily Paper Collector
 
 This plan builds the project bottom-up: foundational utilities first, then individual components, then the orchestration layer, and finally the GUI. Every step includes concrete testing criteria.
 
@@ -11,7 +11,7 @@ This plan builds the project bottom-up: foundational utilities first, then indiv
 Create every directory and `__init__.py` listed in the design doc:
 
 ```
-daily-paper-collector-v2/
+daily-paper-collector/
 ├── config/
 ├── src/
 │   ├── __init__.py

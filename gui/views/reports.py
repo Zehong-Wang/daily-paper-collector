@@ -4,6 +4,64 @@ from src.config import load_config
 from src.email.sender import EmailSender
 
 
+def _split_specific_report(specific: str) -> tuple[str, str]:
+    """Split the specific report markdown into synthesis and paper details.
+
+    The report generator joins them with a '---' divider followed by
+    '## Paper Details'. Returns (synthesis, paper_details).
+    """
+    divider = "\n---\n"
+    idx = specific.find(divider)
+    if idx == -1:
+        return specific, ""
+    synthesis = specific[:idx]
+    paper_details = specific[idx + len(divider) :]
+    return synthesis, paper_details
+
+
+def _render_paper_cards(matches: list[dict]) -> None:
+    """Render expandable paper cards with comprehensive details."""
+    for i, m in enumerate(matches, 1):
+        title = m.get("title", "Unknown")
+        llm_score = m.get("llm_score", "N/A")
+        embedding_score = m.get("embedding_score", 0)
+        label = f"**{i}. {title}** — Score: {llm_score}/10"
+        with st.expander(label):
+            # Score and categories
+            categories = m.get("categories", [])
+            if isinstance(categories, list):
+                categories_str = ", ".join(categories)
+            else:
+                categories_str = str(categories)
+            st.markdown(
+                f"**Score**: {llm_score}/10 | "
+                f"**Embedding**: {embedding_score:.3f} | "
+                f"**Categories**: {categories_str}"
+            )
+
+            # Authors (full, no truncation)
+            authors = m.get("authors", [])
+            if isinstance(authors, list):
+                authors_str = ", ".join(authors)
+            else:
+                authors_str = str(authors)
+            st.markdown(f"**Authors**: {authors_str}")
+
+            # Abstract (full, no truncation)
+            abstract = m.get("abstract", "")
+            if abstract:
+                st.markdown(f"**Abstract**: {abstract}")
+
+            # Relevance reason
+            reason = m.get("llm_reason", "N/A")
+            st.markdown(f"**Why this paper is relevant**: {reason}")
+
+            # arXiv link
+            arxiv_id = m.get("arxiv_id", "")
+            if arxiv_id:
+                st.markdown(f"[Read on arXiv →](https://arxiv.org/abs/{arxiv_id})")
+
+
 def render(store):
     st.title("Reports")
 
@@ -42,24 +100,18 @@ def render(store):
                 st.info("No general report for this date.")
         with tab2:
             if specific:
-                st.markdown(specific)
+                synthesis, _ = _split_specific_report(specific)
+
+                # Block 1: Theme-based synthesis narrative
+                st.markdown(synthesis)
+
+                # Block 2: Expandable paper-wise cards
+                st.divider()
+                st.subheader("Paper Details")
+                matches = store.get_matches_by_date(selected_date)
+                if matches:
+                    _render_paper_cards(matches)
+                else:
+                    st.info("No matched papers for this date.")
             else:
                 st.info("No specific report for this date.")
-
-        # Show matches for this date
-        st.subheader("Match Results")
-        matches = store.get_matches_by_date(selected_date)
-        if matches:
-            for m in matches:
-                llm_score = m.get("llm_score", "N/A")
-                embedding_score = m.get("embedding_score", 0)
-                with st.expander(
-                    f"**{m['title']}** (LLM: {llm_score}/10, Embedding: {embedding_score:.3f})"
-                ):
-                    st.write(f"**Reason:** {m.get('llm_reason', 'N/A')}")
-                    abstract = m.get("abstract", "")
-                    if len(abstract) > 300:
-                        abstract = abstract[:300] + "..."
-                    st.markdown(abstract)
-        else:
-            st.info("No matches for this date.")

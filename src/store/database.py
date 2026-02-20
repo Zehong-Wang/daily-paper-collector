@@ -410,11 +410,12 @@ class PaperStore:
             conn.close()
 
     def get_report_by_date(self, run_date: str) -> dict | None:
-        """Return report for a date, or None."""
+        """Return the latest report for a date, or None."""
         conn = self._get_conn()
         try:
             row = conn.execute(
-                "SELECT * FROM daily_reports WHERE run_date = ?", (run_date,)
+                "SELECT * FROM daily_reports WHERE run_date = ? ORDER BY id DESC LIMIT 1",
+                (run_date,),
             ).fetchone()
             if row is None:
                 return None
@@ -427,7 +428,7 @@ class PaperStore:
         conn = self._get_conn()
         try:
             rows = conn.execute(
-                "SELECT run_date FROM daily_reports ORDER BY run_date DESC"
+                "SELECT DISTINCT run_date FROM daily_reports ORDER BY run_date DESC"
             ).fetchall()
             return [row["run_date"] for row in rows]
         finally:

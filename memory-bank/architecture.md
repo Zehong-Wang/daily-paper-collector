@@ -276,8 +276,14 @@ Lists current interests with type/value/description, embedding status (Y/N), and
 
 Used by: `gui/app.py` when page == "Interests".
 
-### `gui/pages/reports.py` — Reports Viewer Page
-Date dropdown from `store.get_all_report_dates()`. General/Specific reports in `st.tabs`. Match results for the selected date in expanders with LLM score, embedding score, reason, and abstract preview.
+### `gui/pages/reports.py` → `gui/views/reports.py` — Reports Viewer Page
+Date dropdown from `store.get_all_report_dates()`. Two tabs: General Report and Specific Report.
+
+**General Report tab**: Renders the full general report markdown (overview, trending topics, highlights).
+
+**Specific Report tab** — Two blocks:
+1. **Theme synthesis narrative**: The stored specific report is split at the `---` divider (via `_split_specific_report()`). The synthesis portion (before the divider) is rendered as markdown.
+2. **Expandable paper cards**: Individual matched papers from `store.get_matches_by_date()` shown as `st.expander` widgets (via `_render_paper_cards()`). Each card shows: score, embedding score, categories, full authors (no truncation), full abstract (no truncation), relevance reason, and arXiv link.
 
 Used by: `gui/app.py` when page == "Reports".
 

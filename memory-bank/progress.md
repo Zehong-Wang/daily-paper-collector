@@ -162,16 +162,30 @@ Based on `memory-bank/feature-implementation-1.md` (FR-1 through FR-8).
 
 **Test results:** 29/29 report generator tests pass, 10/10 integration tests pass, 16/16 error handling tests pass. `ruff check` and `ruff format` clean on modified files.
 
+### Feature 2b: GUI Reports Page — Two-Block Specific Report (Done)
+
+**Goal:** Update the Streamlit Reports page to display the specific report in two blocks: (1) theme synthesis narrative, (2) expandable paper-wise cards with comprehensive details.
+
+**Changes:**
+- **`gui/views/reports.py`** — Rewrote the Specific Report tab:
+  - Added `_split_specific_report(specific)` helper: splits the stored specific report markdown at the `---` divider to separate synthesis from paper details.
+  - Added `_render_paper_cards(matches)` helper: renders expandable `st.expander` cards with full details (score, embedding score, categories, full authors, full abstract, relevance reason, arXiv link).
+  - Block 1: Theme synthesis narrative rendered as markdown.
+  - Block 2: Expandable paper cards from `store.get_matches_by_date()`.
+  - Removed the standalone "Match Results" section that was at the bottom of the page (now integrated into the Specific Report tab).
+- **`memory-bank/architecture.md`** — Updated Reports page section to describe two-block layout.
+
 ---
 
 ## All Phases Complete
 
-The implementation plan (Phases 0–14) is fully implemented, plus Feature 1 and Feature 2. The project is feature-complete with:
+The implementation plan (Phases 0–14) is fully implemented, plus Feature 1, Feature 2, and Feature 2b. The project is feature-complete with:
 - 297 tests across 16 test files
 - Full error handling at all external service boundaries
 - `.env.example`, `.gitignore`, and email template verified
 - `claude_code` as default LLM provider (zero marginal cost)
 - Theme-based synthesis report with comprehensive Paper Details
+- GUI Reports page with two-block specific report (synthesis + expandable cards)
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).

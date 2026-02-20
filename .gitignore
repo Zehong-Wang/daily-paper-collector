@@ -9,3 +9,4 @@ htmlcov/
 .coverage
 .venv/
 .DS_Store
+.vscode/

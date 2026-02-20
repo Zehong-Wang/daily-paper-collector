@@ -33,26 +33,25 @@ def get_embedder() -> Embedder:
     return Embedder(config)
 
 
-def main():
-    st.set_page_config(page_title="Daily Paper Collector", layout="wide")
-
-    page = st.sidebar.radio(
-        "Navigation", ["Dashboard", "Papers", "Interests", "Reports", "Settings"]
-    )
-
-    if page == "Dashboard":
-        from gui.pages.dashboard import render
-    elif page == "Papers":
-        from gui.pages.papers import render
-    elif page == "Interests":
-        from gui.pages.interests import render
-    elif page == "Reports":
-        from gui.pages.reports import render
-    elif page == "Settings":
-        from gui.pages.settings import render
-
-    render(get_store())
+st.set_page_config(page_title="Daily Paper Collector", layout="wide")
 
 
-if __name__ == "__main__":
-    main()
+def _make_page(module_path: str):
+    """Create a page callable that imports and renders the given view module."""
+    def page_fn():
+        import importlib
+        mod = importlib.import_module(module_path)
+        mod.render(get_store())
+    return page_fn
+
+
+pages = [
+    st.Page(_make_page("gui.views.dashboard"), title="Dashboard", url_path="dashboard", default=True),
+    st.Page(_make_page("gui.views.papers"), title="Papers", url_path="papers"),
+    st.Page(_make_page("gui.views.interests"), title="Interests", url_path="interests"),
+    st.Page(_make_page("gui.views.reports"), title="Reports", url_path="reports"),
+    st.Page(_make_page("gui.views.settings"), title="Settings", url_path="settings"),
+]
+
+nav = st.navigation(pages)
+nav.run()

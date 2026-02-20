@@ -13,6 +13,7 @@ lxml>=5.0
 requests>=2.31
 pyyaml>=6.0
 python-dotenv>=1.0
+watchdog
 
 # Optional (uncomment if needed)
 # faiss-cpu>=1.8

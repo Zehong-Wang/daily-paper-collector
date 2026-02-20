@@ -24,8 +24,8 @@ Automated arXiv paper collection and analysis tool. Fetches daily papers from co
 git clone https://github.com/Zehong-Wang/daily-paper-collector.git
 cd daily-paper-collector
 
-conda create -n daily-paper-collector python=3.11 -y
-conda activate daily-paper-collector
+conda create -n papers python=3.11 -y
+conda activate papers
 ```
 
 ### 2. Install dependencies

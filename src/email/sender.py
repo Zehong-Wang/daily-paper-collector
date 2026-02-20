@@ -106,6 +106,21 @@ strong {{
 
         return premailer.transform(html_template)
 
+    def send_sync(
+        self,
+        general_report: str,
+        specific_report: str,
+        run_date: str,
+    ):
+        """Synchronous version of send() for non-async contexts (e.g. Streamlit GUI)."""
+        self.logger.info("Preparing email for %s", run_date)
+        combined_md = f"{general_report}\n\n---\n\n{specific_report}"
+        html_content = self.render_markdown_to_html(combined_md)
+        subject = f"{self.subject_prefix} {run_date}"
+        msg = self._build_email(html_content, subject)
+        self._send_smtp(msg)
+        self.logger.info("Email sent successfully to %s", ", ".join(self.to_addresses))
+
     async def send(
         self,
         general_report: str,

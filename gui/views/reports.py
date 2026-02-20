@@ -1,5 +1,8 @@
 import streamlit as st
 
+from src.config import load_config
+from src.email.sender import EmailSender
+
 
 def render(store):
     st.title("Reports")
@@ -13,15 +16,33 @@ def render(store):
     report = store.get_report_by_date(selected_date)
 
     if report:
+        # Send report via email button
+        general = report.get("general_report", "")
+        specific = report.get("specific_report", "")
+
+        if general or specific:
+            if st.button("Send Report via Email", type="primary"):
+                try:
+                    config = load_config()
+                    if not config.get("email", {}).get("enabled", False):
+                        st.error("Email is not enabled in configuration.")
+                    else:
+                        sender = EmailSender(config)
+                        sender.send_sync(general, specific, selected_date)
+                        to_addrs = ", ".join(config["email"]["to"])
+                        st.success(f"Report sent to {to_addrs}")
+                except Exception as e:
+                    st.error(f"Failed to send email: {e}")
+
         tab1, tab2 = st.tabs(["General Report", "Specific Report"])
         with tab1:
-            if report.get("general_report"):
-                st.markdown(report["general_report"])
+            if general:
+                st.markdown(general)
             else:
                 st.info("No general report for this date.")
         with tab2:
-            if report.get("specific_report"):
-                st.markdown(report["specific_report"])
+            if specific:
+                st.markdown(specific)
             else:
                 st.info("No specific report for this date.")
 

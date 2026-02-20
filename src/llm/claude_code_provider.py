@@ -27,8 +27,11 @@ class ClaudeCodeProvider(LLMProvider):
         # Parse the JSON envelope from --output-format json
         try:
             envelope = json.loads(raw)
-            if isinstance(envelope, dict) and "result" in envelope:
-                return str(envelope["result"]).strip()
+            if isinstance(envelope, dict):
+                if envelope.get("is_error"):
+                    raise RuntimeError(f"Claude CLI returned error: {envelope.get('result', raw)}")
+                if "result" in envelope:
+                    return str(envelope["result"]).strip()
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -57,11 +60,14 @@ class ClaudeCodeProvider(LLMProvider):
         for attempt in range(self.max_retries):
             try:
                 return await self._execute_subprocess(prompt, system)
-            except RuntimeError:
+            except RuntimeError as e:
                 if attempt == self.max_retries - 1:
                     raise
                 wait = 2**attempt
-                self.logger.warning("CLI attempt %d failed, retrying in %ds...", attempt + 1, wait)
+                self.logger.warning(
+                    "CLI attempt %d/%d failed: %s — retrying in %ds...",
+                    attempt + 1, self.max_retries, e, wait,
+                )
                 await asyncio.sleep(wait)
 
     async def _execute_subprocess(self, prompt: str, system: str = "") -> str:
@@ -74,6 +80,8 @@ class ClaudeCodeProvider(LLMProvider):
             "--output-format",
             "json",
             "--no-session-persistence",
+            "--tools",
+            "",
         ]
         if system:
             cmd.extend(["--system-prompt", system])
@@ -95,8 +103,16 @@ class ClaudeCodeProvider(LLMProvider):
             raise RuntimeError(f"Claude CLI timed out after {self.timeout}s")
 
         if process.returncode != 0:
+            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+            # Try to extract error message from JSON envelope in stderr
+            try:
+                err_envelope = json.loads(stderr_text)
+                if isinstance(err_envelope, dict) and err_envelope.get("result"):
+                    stderr_text = err_envelope["result"]
+            except (json.JSONDecodeError, TypeError):
+                pass
             raise RuntimeError(
-                f"Claude CLI exited with code {process.returncode}: {stderr.decode('utf-8')}"
+                f"Claude CLI exited with code {process.returncode}: {stderr_text}"
             )
 
         return stdout.decode("utf-8")

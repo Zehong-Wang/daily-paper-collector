@@ -1,5 +1,5 @@
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from src.store.database import PaperStore
 from src.fetcher.arxiv_fetcher import ArxivFetcher
@@ -48,6 +48,7 @@ class DailyPipeline:
         13. Return summary dict.
         """
         run_date = date.today().isoformat()
+        cutoff_date = (date.today() - timedelta(days=2)).isoformat()
         self.logger.info("Starting daily pipeline for %s", run_date)
 
         # Step 1: Fetch
@@ -61,17 +62,18 @@ class DailyPipeline:
             "Saved %d new papers (%d duplicates)", len(new_papers), len(papers) - len(new_papers)
         )
 
-        # Step 3: Embed
-        self.logger.info("Computing embeddings for new papers...")
-        self.embedder.compute_embeddings(new_papers, self.store)
+        # Step 3: Embed new papers that don't have embeddings yet
+        self.logger.info("Computing embeddings for papers without embeddings...")
+        papers_to_embed = self.store.get_papers_without_embeddings()
+        self.embedder.compute_embeddings(papers_to_embed, self.store)
 
         # Step 4: Interests
         interests = self.interest_mgr.get_interests_with_embeddings()
         if not interests:
             self.logger.warning("No interests configured. Skipping matching.")
-            # Still generate general report
-            general = await self.report_gen.generate_general(new_papers, run_date)
-            self.store.save_report(run_date, general, "", len(new_papers), 0)
+            # Still generate general report using all fetched papers
+            general = await self.report_gen.generate_general(papers, run_date)
+            self.store.save_report(run_date, general, "", len(papers), 0)
             return {
                 "date": run_date,
                 "papers_fetched": len(papers),
@@ -80,12 +82,17 @@ class DailyPipeline:
                 "email_sent": False,
             }
 
-        # Step 5-6: Match (only today's papers, not the entire historical DB)
-        todays_papers = self.store.get_papers_by_date_with_embeddings(run_date)
-        self.logger.info("Found %d papers with embeddings for %s", len(todays_papers), run_date)
+        # Step 5-6: Match using date range (cutoff_date to run_date)
+        recent_papers = self.store.get_papers_in_date_range_with_embeddings(
+            cutoff_date, run_date
+        )
+        self.logger.info(
+            "Found %d papers with embeddings in range %s to %s",
+            len(recent_papers), cutoff_date, run_date,
+        )
         top_n = self.config["matching"]["embedding_top_n"]
         threshold = self.config["matching"]["similarity_threshold"]
-        candidates = self.embedder.find_similar(interests, todays_papers, top_n, threshold)
+        candidates = self.embedder.find_similar(interests, recent_papers, top_n, threshold)
         self.logger.info("Embedding matcher found %d candidates", len(candidates))
 
         # Step 7: Re-rank
@@ -102,8 +109,8 @@ class DailyPipeline:
                 paper.get("llm_reason", ""),
             )
 
-        # Step 9-10: Reports
-        general = await self.report_gen.generate_general(new_papers, run_date)
+        # Step 9-10: Reports (use all fetched papers, not just new ones)
+        general = await self.report_gen.generate_general(papers, run_date)
         specific = await self.report_gen.generate_specific(ranked, interests, run_date)
 
         # Step 11: Email
@@ -117,7 +124,7 @@ class DailyPipeline:
                 self.logger.error("Email sending failed: %s", e)
 
         # Step 12: Save report
-        self.store.save_report(run_date, general, specific, len(new_papers), len(ranked))
+        self.store.save_report(run_date, general, specific, len(papers), len(ranked))
 
         return {
             "date": run_date,

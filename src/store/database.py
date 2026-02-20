@@ -45,7 +45,8 @@ class PaperStore:
                     embedding_score REAL,
                     llm_score REAL,
                     llm_reason TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(paper_id, run_date)
                 );
 
                 CREATE TABLE IF NOT EXISTS summaries (
@@ -184,6 +185,23 @@ class PaperStore:
         finally:
             conn.close()
 
+    def get_papers_in_date_range_with_embeddings(
+        self, start_date: str, end_date: str
+    ) -> list[dict]:
+        """Return papers with published_date between start_date and end_date (inclusive)
+        that have embeddings computed."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT * FROM papers
+                   WHERE published_date >= ? AND published_date <= ?
+                     AND embedding IS NOT NULL""",
+                (start_date, end_date),
+            ).fetchall()
+            return [self._row_to_paper(row) for row in rows]
+        finally:
+            conn.close()
+
     def _row_to_paper(self, row: sqlite3.Row) -> dict:
         """Convert a sqlite3.Row to a paper dict with deserialized JSON fields."""
         d = dict(row)
@@ -285,13 +303,17 @@ class PaperStore:
         llm_score: float = None,
         llm_reason: str = None,
     ) -> int:
-        """Insert a match record. Return the new id."""
+        """Insert or update a match record. Return the row id."""
         conn = self._get_conn()
         try:
             cursor = conn.execute(
                 """INSERT INTO matches
                    (paper_id, run_date, embedding_score, llm_score, llm_reason)
-                   VALUES (?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(paper_id, run_date) DO UPDATE SET
+                       embedding_score = excluded.embedding_score,
+                       llm_score = excluded.llm_score,
+                       llm_reason = excluded.llm_reason""",
                 (paper_id, run_date, embedding_score, llm_score, llm_reason),
             )
             conn.commit()

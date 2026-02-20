@@ -14,25 +14,25 @@ Automated arXiv paper collection and analysis tool. Fetches daily papers from co
 ## Requirements
 
 - Python >= 3.11
+- ~80 MB disk space for the sentence-transformers model (downloaded on first run)
 
 ## Setup
 
-### 1. Clone and create virtual environment
+### 1. Create conda environment
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Zehong-Wang/daily-paper-collector.git
 cd daily-paper-collector
 
-python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows
+conda create -n daily-paper-collector python=3.11 -y
+conda activate daily-paper-collector
 ```
 
 ### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
-pip install -e .
+pip install -e .            # installs the project in editable mode
 ```
 
 ### 3. Configure environment variables
@@ -43,26 +43,39 @@ Copy the example file and fill in your credentials:
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` — only set the variables you need:
 
-```
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-EMAIL_USERNAME=your-email@gmail.com
-EMAIL_PASSWORD=your-app-password
-```
+| Variable              | Required when              |
+| --------------------- | -------------------------- |
+| `OPENAI_API_KEY`    | LLM provider is `openai` |
+| `ANTHROPIC_API_KEY` | LLM provider is `claude` |
+| `EMAIL_USERNAME`    | Email delivery is enabled  |
+| `EMAIL_PASSWORD`    | Email delivery is enabled  |
 
-Only the keys for your chosen LLM provider are required. Email credentials are only needed if email delivery is enabled.
+The default LLM provider is **`claude_code`**, which calls the `claude` CLI and requires no API key (uses your existing Claude Code subscription). If you use this default, no API keys are needed.
 
 ### 4. Edit configuration
 
 All runtime settings live in `config/config.yaml`:
 
-- **arXiv categories** — which categories to fetch
-- **Matching thresholds** — embedding top-N, LLM top-K, similarity cutoff
-- **LLM provider** — `openai`, `claude`, or `claude_code`
-- **Email** — SMTP host, recipients, subject prefix
-- **Scheduler** — cron expression (default: daily at 8:00 AM)
+| Section       | Key settings                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| `arxiv`     | Categories to fetch (`cs.AI`, `cs.CL`, `cs.LG`, `cs.CV`), max results per category          |
+| `matching`  | Embedding model, top-N coarse candidates (50), top-K final results (10), similarity threshold (0.3) |
+| `llm`       | Provider (`openai` / `claude` / `claude_code`), model, timeout, retries, concurrency          |
+| `email`     | SMTP host/port, sender, recipients, subject prefix, enabled toggle                                  |
+| `scheduler` | Cron expression (default:`0 8 * * *` — daily at 8:00 AM)                                         |
+| `database`  | SQLite path (default:`data/papers.db`, auto-created)                                              |
+
+### 5. Add your research interests
+
+Before the first run, add at least one interest so the matcher can find relevant papers. You can do this through the Streamlit GUI (Interests page) or by inserting directly into the SQLite database. Three interest types are supported:
+
+- **keyword** — a research topic (e.g., "transformer architecture", "reinforcement learning")
+- **paper** — an arXiv ID of one of your past papers (abstract auto-fetched for embedding)
+- **reference_paper** — an arXiv ID of a paper you find relevant
+
+Without interests, the pipeline still runs but only produces a general report (no personalized recommendations).
 
 ## Usage
 
@@ -113,21 +126,27 @@ ruff format .
 src/
   main.py              # CLI entry point (--mode scheduler|run)
   pipeline.py          # DailyPipeline orchestrator
+  config.py            # Config loading, env helpers, logging setup
   fetcher/             # ArXiv API fetching
   store/               # SQLite CRUD (papers, interests, matches, summaries, reports)
-  matcher/             # embedder.py, ranker.py
+  matcher/             # embedder.py (sentence-transformers), ranker.py (LLM re-rank)
   interest/            # Interest manager (keywords, past papers, references)
-  report/              # Markdown report generation
+  report/              # Markdown report generation (general + specific)
   email/               # SMTP sender (Markdown → HTML → CSS-inline)
   summarizer/          # ar5iv HTML parsing + LLM summarization
-  llm/                 # LLM provider abstraction (OpenAI, Claude, Claude Code)
+  llm/                 # LLM provider abstraction (OpenAI, Claude API, Claude Code CLI)
   scheduler/           # APScheduler cron wrapper
 gui/
   app.py               # Streamlit main entry
   pages/               # dashboard, papers, interests, reports, settings
   components/          # paper_card, report_viewer
+scripts/
+  run_pipeline.py      # CI/CD entry point (GitHub Actions)
+templates/
+  email_template.md    # Email format reference
 config/config.yaml     # Runtime configuration
 data/papers.db         # SQLite database (auto-created)
+tests/                 # Unit, integration, and GUI tests
 ```
 
 ## License

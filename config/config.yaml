@@ -32,7 +32,7 @@ llm:
 
 # Email settings
 email:
-  enabled: true
+  enabled: false
   smtp:
     host: "smtp.gmail.com"
     port: 587

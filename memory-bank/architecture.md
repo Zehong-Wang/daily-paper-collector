@@ -137,12 +137,12 @@ Markdown report generation for both general (all daily papers) and specific (int
 
 - `__init__(llm)` — Takes an `LLMProvider` instance. Uses `logging.getLogger(__name__)`.
 - `generate_general(papers, run_date) -> str` — Builds a complete Markdown general report with three sections:
-  1. **Today's Overview** (`_build_overview`) — Pure Python; uses `collections.Counter` on each paper's primary category (first element of `categories` list). Formats as `"cs.AI: 3 | cs.CL: 4 | ..."`.
-  2. **Trending Topics** (`_build_trending_topics`) — Sends all paper titles to the LLM to identify 3-5 emerging research topics. Catches LLM exceptions gracefully.
-  3. **Highlight Papers** (`_build_highlight_papers`) — Sends paper titles + first 150 chars of abstract + first 3 authors to the LLM to select 3-5 noteworthy papers. Catches LLM exceptions gracefully.
+  1. **Today's Overview** (`_build_overview`) — Pure Python; uses `collections.Counter` on each paper's primary category (first element of `categories` list). Formats top-10 categories as a Markdown table with an "Others" row summarizing remaining categories.
+  2. **Trending Topics** (`_build_trending_topics`) — Sends all paper titles to the LLM to identify 3-5 emerging research topics. LLM prompt explicitly forbids headings to prevent visual hierarchy conflicts. Catches LLM exceptions gracefully.
+  3. **Highlight Papers** (`_build_highlight_papers`) — Sends paper titles + first 150 chars of abstract + first 3 authors to the LLM to select 3-5 noteworthy papers. LLM prompt explicitly forbids headings. Catches LLM exceptions gracefully.
 - `generate_specific(ranked_papers, interests, run_date) -> str` — Formats pre-scored data from the ranker into Markdown. **Does NOT call the LLM.** Two sections:
-  1. Numbered list of ranked papers with `llm_score/10` and `llm_reason`.
-  2. "Related Papers" section with authors, categories, abstract preview (first 200 chars), and arXiv link for each paper.
+  1. Numbered list of ranked papers with `llm_score/10`, arXiv link, and blockquoted `llm_reason`.
+  2. "Paper Details" section with score, categories, authors (truncated to 5 with "et al."), abstract preview (first 300 chars), and arXiv link for each paper.
   Handles edge cases: empty results, string-type authors/categories (not just lists).
 
 Used by: `DailyPipeline` (Phase 10) for generating both report types after matching.
@@ -153,7 +153,7 @@ SMTP email delivery with a Markdown → HTML → CSS-inline rendering pipeline.
 - `__init__(config)` — Reads `config["email"]` sub-dict. Extracts SMTP settings (host, port) from `config["email"]["smtp"]`. Reads username and password from environment variables specified by `smtp.username_env` and `smtp.password_env`. Stores `from_address`, `to_addresses` (list), and `subject_prefix`. Uses `logging.getLogger(__name__)`.
 - `render_markdown_to_html(md_content) -> str` — Three-step rendering pipeline:
   1. Converts Markdown to HTML via `markdown.markdown()` with `tables` and `fenced_code` extensions.
-  2. Wraps the HTML body in a full HTML template with a `<style>` block defining styles for body (font family, line height, color), headings (h1/h2/h3 sizes), links (color), tables (borders, padding), horizontal rules, and code blocks.
+  2. Wraps the HTML body in a styled HTML template with a `.wrapper` div (720px max-width) and comprehensive CSS: light gray background, blue-accented h2 headings with left border and background, green-accented blockquotes for LLM reasons, styled tables with alternating row colors, proper list spacing, and responsive viewport meta tag.
   3. Inlines all CSS via `premailer.transform()` — required because most email clients strip `<style>` tags.
 - `send(general_report, specific_report, ranked_papers, run_date)` — Async entry point. Combines both Markdown reports with a `---` separator, renders to HTML via `render_markdown_to_html()`, builds a MIME message via `_build_email()`, then sends via `_send_smtp()` wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
 - `_build_email(html_content, subject) -> MIMEMultipart` — Constructs a `MIMEMultipart("alternative")` message with Subject, From, To headers and a single `MIMEText("...", "html")` attachment.

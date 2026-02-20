@@ -38,69 +38,117 @@ class EmailSender:
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.6;
-    color: #333333;
-    max-width: 800px;
+    line-height: 1.7;
+    color: #2d3748;
+    background-color: #f7fafc;
+    margin: 0;
+    padding: 0;
+}}
+.wrapper {{
+    max-width: 720px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 24px 16px;
 }}
 h1 {{
-    font-size: 24px;
-    color: #1a1a1a;
-    border-bottom: 2px solid #e0e0e0;
-    padding-bottom: 8px;
+    font-size: 26px;
+    font-weight: 700;
+    color: #1a202c;
+    border-bottom: 3px solid #4299e1;
+    padding-bottom: 12px;
+    margin-bottom: 24px;
 }}
 h2 {{
     font-size: 20px;
-    color: #2c2c2c;
-    margin-top: 24px;
+    font-weight: 600;
+    color: #2b6cb0;
+    margin-top: 32px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background-color: #ebf8ff;
+    border-left: 4px solid #4299e1;
+    border-radius: 0 4px 4px 0;
 }}
 h3 {{
-    font-size: 16px;
-    color: #444444;
-    margin-top: 16px;
+    font-size: 17px;
+    font-weight: 600;
+    color: #2d3748;
+    margin-top: 24px;
+    margin-bottom: 10px;
+}}
+p {{
+    margin: 8px 0 12px 0;
 }}
 a {{
-    color: #0066cc;
+    color: #2b6cb0;
     text-decoration: none;
+    font-weight: 500;
 }}
-a:hover {{
-    text-decoration: underline;
+ul, ol {{
+    padding-left: 20px;
+    margin: 8px 0 16px 0;
+}}
+li {{
+    margin-bottom: 10px;
+    line-height: 1.6;
 }}
 table {{
     border-collapse: collapse;
-    width: 100%;
-    margin: 16px 0;
-}}
-th, td {{
-    border: 1px solid #dddddd;
-    padding: 8px 12px;
-    text-align: left;
+    width: auto;
+    margin: 12px 0 20px 0;
+    font-size: 14px;
 }}
 th {{
-    background-color: #f5f5f5;
+    background-color: #edf2f7;
+    color: #2d3748;
+    font-weight: 600;
+    padding: 8px 16px;
+    border: 1px solid #e2e8f0;
+    text-align: left;
+}}
+td {{
+    padding: 6px 16px;
+    border: 1px solid #e2e8f0;
+}}
+tr:nth-child(even) td {{
+    background-color: #f7fafc;
 }}
 hr {{
     border: none;
-    border-top: 1px solid #e0e0e0;
-    margin: 24px 0;
+    border-top: 2px solid #e2e8f0;
+    margin: 32px 0;
+}}
+blockquote {{
+    margin: 4px 0 12px 0;
+    padding: 8px 14px;
+    background-color: #f0fff4;
+    border-left: 3px solid #48bb78;
+    color: #276749;
+    font-size: 14px;
+    border-radius: 0 4px 4px 0;
+}}
+blockquote p {{
+    margin: 0;
 }}
 code {{
-    background-color: #f5f5f5;
+    background-color: #edf2f7;
     padding: 2px 6px;
     border-radius: 3px;
-    font-size: 14px;
+    font-size: 13px;
+    color: #553c9a;
 }}
 strong {{
-    color: #1a1a1a;
+    color: #1a202c;
 }}
 </style>
 </head>
 <body>
+<div class="wrapper">
 {html_body}
+</div>
 </body>
 </html>"""
 

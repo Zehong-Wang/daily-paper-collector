@@ -74,18 +74,25 @@ class ReportGenerator:
             score = paper.get("llm_score", 0)
             reason = paper.get("llm_reason", "N/A")
             title = paper.get("title", "Unknown")
-            sections.append(f"{i}. **{title}** (Relevance: {score}/10)")
-            sections.append(f"   - Why it matters to you: {reason}\n")
+            arxiv_id = paper.get("arxiv_id", "")
+            sections.append(
+                f"{i}. **{title}** — Relevance: **{score}/10** "
+                f"([arXiv](https://arxiv.org/abs/{arxiv_id}))  \n"
+                f"   {reason}\n"
+            )
 
         # Related Papers section with full details
-        sections.append("---\n")
-        sections.append("## Related Papers\n")
+        sections.append("\n---\n")
+        sections.append("## Paper Details\n")
 
         for i, paper in enumerate(ranked_papers, 1):
             title = paper.get("title", "Unknown")
             authors = paper.get("authors", [])
             if isinstance(authors, list):
-                authors_str = ", ".join(authors)
+                if len(authors) > 5:
+                    authors_str = ", ".join(authors[:5]) + f" et al. ({len(authors)} authors)"
+                else:
+                    authors_str = ", ".join(authors)
             else:
                 authors_str = str(authors)
             categories = paper.get("categories", [])
@@ -94,14 +101,15 @@ class ReportGenerator:
             else:
                 categories_str = str(categories)
             abstract = paper.get("abstract", "")
-            abstract_preview = abstract[:200] + "..." if len(abstract) > 200 else abstract
+            abstract_preview = abstract[:300] + "..." if len(abstract) > 300 else abstract
             arxiv_id = paper.get("arxiv_id", "")
+            score = paper.get("llm_score", 0)
 
-            sections.append(f"### {i}. {title}")
-            sections.append(f"- **Authors**: {authors_str}")
-            sections.append(f"- **Categories**: {categories_str}")
-            sections.append(f"- **Abstract**: {abstract_preview}")
-            sections.append(f"- [arXiv](https://arxiv.org/abs/{arxiv_id})\n")
+            sections.append(f"### {i}. {title}\n")
+            sections.append(f"**Score**: {score}/10 | **Categories**: {categories_str}\n")
+            sections.append(f"**Authors**: {authors_str}\n")
+            sections.append(f"{abstract_preview}\n")
+            sections.append(f"[Read on arXiv →](https://arxiv.org/abs/{arxiv_id})\n")
 
         report = "\n".join(sections)
         self.logger.info("Specific report generation complete")
@@ -111,8 +119,8 @@ class ReportGenerator:
         """Build the overview section with paper counts per primary category."""
         total = len(papers)
         lines = []
-        lines.append("### Today's Overview")
-        lines.append(f"- **{total}** new papers collected")
+        lines.append("### Today's Overview\n")
+        lines.append(f"**{total}** new papers collected\n")
 
         if papers:
             # Count by primary category (first in the categories list)
@@ -127,11 +135,17 @@ class ReportGenerator:
                     primary = "unknown"
                 category_counter[primary] += 1
 
-            # Format as "cs.AI: 3 | cs.CL: 4 | ..."
-            breakdown = " | ".join(
-                f"{cat}: {count}" for cat, count in category_counter.most_common()
-            )
-            lines.append(f"- {breakdown}")
+            # Show top categories as a table
+            lines.append("| Category | Papers |")
+            lines.append("|----------|--------|")
+            most_common = category_counter.most_common()
+            top_categories = most_common[:10]
+            rest = most_common[10:]
+            for cat, count in top_categories:
+                lines.append(f"| {cat} | {count} |")
+            if rest:
+                rest_total = sum(c for _, c in rest)
+                lines.append(f"| Others ({len(rest)} categories) | {rest_total} |")
 
         lines.append("")
         return "\n".join(lines)
@@ -148,9 +162,11 @@ class ReportGenerator:
             f"Here are {len(titles)} paper titles published today on arXiv:\n\n"
             f"{titles_text}\n\n"
             "Based on these titles, identify 3-5 emerging or trending research topics. "
-            "For each topic, provide a brief description (1-2 sentences) explaining "
-            "the trend and how many papers relate to it. "
-            "Format as a Markdown bullet list."
+            "For each topic, provide a bold topic name followed by a brief description "
+            "(1-2 sentences) explaining the trend and approximate paper count. "
+            "Format as a Markdown bullet list. "
+            "IMPORTANT: Do NOT include any headings (# or ##). "
+            "Start directly with the bullet list."
         )
         system = "You are a research trend analyst summarizing daily arXiv publications."
 
@@ -189,8 +205,10 @@ class ReportGenerator:
             f"Here are {len(papers)} papers published today on arXiv:\n\n"
             f"{entries_text}\n\n"
             "Select 3-5 of the most noteworthy or impactful papers from this list. "
-            "For each, provide: the paper title, the authors, and a one-line description "
-            "of why it is noteworthy. Format as a numbered Markdown list."
+            "For each, provide: the paper title (bold), the authors, and a one-line "
+            "description of why it is noteworthy. Format as a numbered Markdown list. "
+            "IMPORTANT: Do NOT include any headings (# or ##). "
+            "Start directly with the numbered list."
         )
         system = "You are a research curator selecting the most important daily arXiv papers."
 

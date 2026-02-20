@@ -1,3 +1,4 @@
+import io
 import logging
 
 import requests
@@ -5,10 +6,37 @@ from bs4 import BeautifulSoup
 
 
 class PaperSummarizer:
+    _MAX_TEXT_CHARS = 15000
+
     def __init__(self, llm, store):
         self.llm = llm
         self.store = store
         self.logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _truncate_text(text: str) -> str:
+        """Limit text length to stay within LLM context budget."""
+        return text[: PaperSummarizer._MAX_TEXT_CHARS]
+
+    @staticmethod
+    def _looks_like_navigation_shell(text: str) -> bool:
+        """Detect non-paper UI shell text (help/search/citation nav) from ar5iv/arXiv pages."""
+        lower = text.lower()
+        nav_markers = [
+            "help",
+            "search",
+            "references & citations",
+            "export bibtex",
+            "submission history",
+            "view pdf",
+            "arxivlabs",
+            "bookmark",
+            "add to lists",
+        ]
+        section_markers = ["abstract", "introduction", "method", "experiment", "conclusion", "result"]
+        nav_hits = sum(marker in lower for marker in nav_markers)
+        has_sections = any(marker in lower for marker in section_markers)
+        return nav_hits >= 4 and not has_sections
 
     def fetch_paper_text(self, ar5iv_url: str) -> str:
         """Fetch the ar5iv HTML page and extract the paper's main text.
@@ -23,7 +51,11 @@ class PaperSummarizer:
         Return the extracted text. Raise RuntimeError if fetch fails.
         """
         try:
-            response = requests.get(ar5iv_url, timeout=30)
+            response = requests.get(
+                ar5iv_url,
+                timeout=30,
+                headers={"User-Agent": "daily-paper-collector/0.1 (+https://arxiv.org)"},
+            )
             response.raise_for_status()
         except requests.RequestException as e:
             raise RuntimeError(f"Failed to fetch paper from {ar5iv_url}: {e}") from e
@@ -47,12 +79,55 @@ class PaperSummarizer:
                 paragraphs.append(text)
 
         full_text = "\n\n".join(paragraphs)
+        if not full_text:
+            raise RuntimeError(f"No extractable text found in {ar5iv_url}")
+        if self._looks_like_navigation_shell(full_text):
+            raise RuntimeError(f"Extracted navigation shell content instead of paper body from {ar5iv_url}")
 
-        # Truncate to 15000 characters
-        if len(full_text) > 15000:
-            full_text = full_text[:15000]
+        # Truncate to max characters
+        full_text = self._truncate_text(full_text)
 
         self.logger.info(f"Extracted {len(full_text)} characters from {ar5iv_url}")
+        return full_text
+
+    def fetch_pdf_text(self, pdf_url: str) -> str:
+        """Fetch the paper PDF and extract text as fallback when ar5iv HTML is unusable."""
+        try:
+            response = requests.get(
+                pdf_url,
+                timeout=60,
+                headers={"User-Agent": "daily-paper-collector/0.1 (+https://arxiv.org)"},
+            )
+            response.raise_for_status()
+        except requests.RequestException as e:
+            raise RuntimeError(f"Failed to fetch PDF from {pdf_url}: {e}") from e
+
+        try:
+            from pypdf import PdfReader
+        except ImportError as e:
+            raise RuntimeError(
+                "PDF fallback requires 'pypdf'. Install dependencies from requirements.txt."
+            ) from e
+
+        try:
+            reader = PdfReader(io.BytesIO(response.content))
+        except Exception as e:  # pragma: no cover - parser-specific failures
+            raise RuntimeError(f"Failed to parse PDF from {pdf_url}: {e}") from e
+
+        chunks = []
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                chunks.append(page_text.strip())
+            if sum(len(c) for c in chunks) >= self._MAX_TEXT_CHARS:
+                break
+
+        full_text = "\n\n".join(chunks).strip()
+        if not full_text:
+            raise RuntimeError(f"No extractable text found in PDF {pdf_url}")
+
+        full_text = self._truncate_text(full_text)
+        self.logger.info(f"Extracted {len(full_text)} characters from PDF {pdf_url}")
         return full_text
 
     async def summarize(self, paper_id: int, mode: str = "brief") -> str:
@@ -86,9 +161,16 @@ class PaperSummarizer:
         if paper.get("ar5iv_url"):
             try:
                 paper_text = self.fetch_paper_text(paper["ar5iv_url"])
-                self.logger.info(f"Fetched full text for paper {paper_id}")
+                self.logger.info(f"Fetched ar5iv full text for paper {paper_id}")
             except RuntimeError as e:
-                self.logger.warning(f"Failed to fetch full text, using abstract: {e}")
+                self.logger.warning(f"Failed ar5iv extraction for paper {paper_id}: {e}")
+
+        if not paper_text and paper.get("pdf_url"):
+            try:
+                paper_text = self.fetch_pdf_text(paper["pdf_url"])
+                self.logger.info(f"Fetched PDF full text for paper {paper_id}")
+            except RuntimeError as e:
+                self.logger.warning(f"Failed PDF extraction for paper {paper_id}: {e}")
 
         if not paper_text:
             paper_text = paper.get("abstract", "")

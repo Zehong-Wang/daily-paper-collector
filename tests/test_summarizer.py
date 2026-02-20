@@ -1,3 +1,5 @@
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -223,6 +225,58 @@ class TestFetchPaperText:
 
         assert text == "Real content."
 
+    def test_raises_on_navigation_shell_content(self, tmp_path):
+        """ar5iv shell-like pages should be rejected instead of treated as paper content."""
+        store = _make_mock_store(tmp_path)
+        llm = MockLLMProvider()
+        summarizer = PaperSummarizer(llm, store)
+
+        html = (
+            "<html><body><article>"
+            "<p>Help</p><p>Search</p><p>References & Citations</p><p>Export BibTeX</p>"
+            "<p>Submission history</p><p>View PDF</p><p>bookmark</p><p>Add to lists</p>"
+            "</article></body></html>"
+        )
+
+        with patch("src.summarizer.paper_summarizer.requests.get") as mock_get:
+            mock_response = MagicMock()
+            mock_response.text = html
+            mock_response.raise_for_status = MagicMock()
+            mock_get.return_value = mock_response
+
+            with pytest.raises(RuntimeError, match="navigation shell content"):
+                summarizer.fetch_paper_text("https://ar5iv.labs.arxiv.org/html/2501.12345")
+
+
+class TestFetchPdfText:
+    def test_extracts_text_from_pdf(self, tmp_path):
+        store = _make_mock_store(tmp_path)
+        llm = MockLLMProvider()
+        summarizer = PaperSummarizer(llm, store)
+
+        class _FakePage:
+            def __init__(self, text):
+                self._text = text
+
+            def extract_text(self):
+                return self._text
+
+        class _FakeReader:
+            def __init__(self, _fp):
+                self.pages = [_FakePage("Introduction"), _FakePage("Method and Results")]
+
+        with patch("src.summarizer.paper_summarizer.requests.get") as mock_get:
+            mock_response = MagicMock()
+            mock_response.content = b"%PDF-fake"
+            mock_response.raise_for_status = MagicMock()
+            mock_get.return_value = mock_response
+
+            with patch.dict(sys.modules, {"pypdf": SimpleNamespace(PdfReader=_FakeReader)}):
+                text = summarizer.fetch_pdf_text("https://arxiv.org/pdf/2501.12345")
+
+        assert "Introduction" in text
+        assert "Method and Results" in text
+
 
 # --- Test summarize ---
 
@@ -314,6 +368,24 @@ class TestSummarize:
 
         assert result == "Summary from abstract."
         assert abstract in llm.last_prompt
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_pdf_when_ar5iv_is_unusable(self, tmp_path):
+        """When ar5iv extraction fails (e.g., page shell), summarizer should use PDF text."""
+        store = _make_mock_store(tmp_path)
+        paper_id = _insert_paper(store)
+
+        llm = MockLLMProvider("Summary from PDF.")
+        summarizer = PaperSummarizer(llm, store)
+
+        with patch.object(
+            summarizer, "fetch_paper_text", side_effect=RuntimeError("navigation shell content")
+        ):
+            with patch.object(summarizer, "fetch_pdf_text", return_value="Full text from PDF."):
+                result = await summarizer.summarize(paper_id, "brief")
+
+        assert result == "Summary from PDF."
+        assert "Full text from PDF." in llm.last_prompt
 
     @pytest.mark.asyncio
     async def test_raises_value_error_for_nonexistent_paper(self, tmp_path):

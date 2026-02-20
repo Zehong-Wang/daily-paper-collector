@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from collections import Counter
 
@@ -44,15 +46,15 @@ class ReportGenerator:
     async def generate_specific(
         self, ranked_papers: list[dict], interests: list[dict], run_date: str
     ) -> str:
-        """Generate a Markdown specific report from already-scored papers.
+        """Generate a Markdown specific report with theme-based synthesis.
 
-        This method does NOT call the LLM — it formats the pre-scored data
-        from the ranker.
+        Uses the LLM to synthesize ranked papers into thematic clusters,
+        followed by comprehensive paper details.
 
         Contents:
         1. Header
-        2. Numbered list of ranked papers with scores and reasons
-        3. Related Papers section with details and arXiv links
+        2. Theme-based synthesis (LLM-generated narrative grouped by themes)
+        3. Paper Details section with full authors, abstracts, and relevance reasons
         """
         self.logger.info("Generating specific report for %s", run_date)
 
@@ -69,30 +71,112 @@ class ReportGenerator:
             f"Top {len(ranked_papers)} papers matching your research interests today:\n"
         )
 
-        # Numbered list with scores and reasons
+        # Theme-based synthesis (LLM for >= 5 papers, simple summary otherwise)
+        synthesis = await self._build_theme_synthesis(ranked_papers, interests)
+        sections.append(synthesis)
+
+        # Paper Details section with comprehensive info
+        sections.append("\n---\n")
+        sections.append(self._build_paper_details(ranked_papers))
+
+        report = "\n".join(sections)
+        self.logger.info("Specific report generation complete")
+        return report
+
+    async def _build_theme_synthesis(self, ranked_papers: list[dict], interests: list[dict]) -> str:
+        """Build a theme-based synthesis of ranked papers using the LLM.
+
+        For >= 5 papers, asks the LLM to group papers into thematic clusters
+        with narrative paragraphs. For < 5 papers, returns a simple bullet
+        list without LLM calls.
+        """
+        if len(ranked_papers) < 5:
+            return self._build_simple_summary(ranked_papers)
+
+        # Format interests for context
+        interest_values = [i.get("value", "") for i in interests if i.get("value")]
+        interests_csv = ", ".join(interest_values) if interest_values else "general research"
+
+        # Build paper entries for the prompt
+        paper_entries = []
         for i, paper in enumerate(ranked_papers, 1):
+            title = paper.get("title", "Unknown")
             score = paper.get("llm_score", 0)
             reason = paper.get("llm_reason", "N/A")
-            title = paper.get("title", "Unknown")
-            arxiv_id = paper.get("arxiv_id", "")
-            sections.append(
-                f"{i}. **{title}** — Relevance: **{score}/10** "
-                f"([arXiv](https://arxiv.org/abs/{arxiv_id}))  \n"
-                f"   {reason}\n"
+            abstract = paper.get("abstract", "")
+            paper_entries.append(
+                f"Paper {i}: {title}\n"
+                f"  Score: {score}/10\n"
+                f"  Reason: {reason}\n"
+                f"  Abstract: {abstract}"
             )
 
-        # Related Papers section with full details
-        sections.append("\n---\n")
-        sections.append("## Paper Details\n")
+        papers_text = "\n\n".join(paper_entries)
+
+        prompt = (
+            f"You are given {len(ranked_papers)} research papers that matched "
+            f"a user's interests: {interests_csv}.\n\n"
+            f"Here are the papers:\n\n{papers_text}\n\n"
+            "Group these papers into 3-6 thematic clusters based on their topics "
+            "and methodologies. For each theme:\n"
+            "1. Give the theme a bold descriptive name as a ### heading\n"
+            "2. Write a flowing 2-4 sentence narrative naming specific papers "
+            "in this cluster and how they relate to the user's interests\n"
+            "3. Highlight connections or contrasts between papers\n\n"
+            "Format as Markdown. IMPORTANT: Do NOT include any top-level headings "
+            "(# or ##). Start directly with ### theme headings."
+        )
+        system = (
+            "You are a research synthesis expert. Your job is to identify thematic "
+            "patterns across papers and write concise, insightful narratives that "
+            "help the reader understand the research landscape."
+        )
+
+        try:
+            response = await self.llm.complete(prompt, system=system)
+        except Exception as e:
+            self.logger.error("LLM call failed for theme synthesis: %s", e)
+            return self._build_fallback_list(ranked_papers)
+
+        return response + "\n"
+
+    def _build_simple_summary(self, ranked_papers: list[dict]) -> str:
+        """Build a simple bullet-list summary for fewer than 5 papers (no LLM)."""
+        lines = []
+        for paper in ranked_papers:
+            title = paper.get("title", "Unknown")
+            score = paper.get("llm_score", 0)
+            reason = paper.get("llm_reason", "N/A")
+            lines.append(f"- **{title}** (Score: {score}/10): {reason}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def _build_fallback_list(self, ranked_papers: list[dict]) -> str:
+        """Build a numbered fallback list when LLM synthesis fails."""
+        lines = []
+        for i, paper in enumerate(ranked_papers, 1):
+            title = paper.get("title", "Unknown")
+            score = paper.get("llm_score", 0)
+            reason = paper.get("llm_reason", "N/A")
+            arxiv_id = paper.get("arxiv_id", "")
+            lines.append(
+                f"{i}. **{title}** — Relevance: **{score}/10** "
+                f"([arXiv](https://arxiv.org/abs/{arxiv_id}))  \n"
+                f"   {reason}"
+            )
+        lines.append("")
+        return "\n".join(lines)
+
+    def _build_paper_details(self, ranked_papers: list[dict]) -> str:
+        """Build comprehensive paper details section."""
+        lines = []
+        lines.append("## Paper Details\n")
 
         for i, paper in enumerate(ranked_papers, 1):
             title = paper.get("title", "Unknown")
             authors = paper.get("authors", [])
             if isinstance(authors, list):
-                if len(authors) > 5:
-                    authors_str = ", ".join(authors[:5]) + f" et al. ({len(authors)} authors)"
-                else:
-                    authors_str = ", ".join(authors)
+                authors_str = ", ".join(authors)
             else:
                 authors_str = str(authors)
             categories = paper.get("categories", [])
@@ -101,19 +185,18 @@ class ReportGenerator:
             else:
                 categories_str = str(categories)
             abstract = paper.get("abstract", "")
-            abstract_preview = abstract[:300] + "..." if len(abstract) > 300 else abstract
             arxiv_id = paper.get("arxiv_id", "")
             score = paper.get("llm_score", 0)
+            reason = paper.get("llm_reason", "N/A")
 
-            sections.append(f"### {i}. {title}\n")
-            sections.append(f"**Score**: {score}/10 | **Categories**: {categories_str}\n")
-            sections.append(f"**Authors**: {authors_str}\n")
-            sections.append(f"{abstract_preview}\n")
-            sections.append(f"[Read on arXiv →](https://arxiv.org/abs/{arxiv_id})\n")
+            lines.append(f"### {i}. {title}\n")
+            lines.append(f"**Score**: {score}/10 | **Categories**: {categories_str}\n")
+            lines.append(f"**Authors**: {authors_str}\n")
+            lines.append(f"**Abstract**: {abstract}\n")
+            lines.append(f"**Why this paper is relevant**: {reason}\n")
+            lines.append(f"[Read on arXiv →](https://arxiv.org/abs/{arxiv_id})\n")
 
-        report = "\n".join(sections)
-        self.logger.info("Specific report generation complete")
-        return report
+        return "\n".join(lines)
 
     def _build_overview(self, papers: list[dict]) -> str:
         """Build the overview section with paper counts per primary category."""

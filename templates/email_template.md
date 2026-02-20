@@ -1,4 +1,4 @@
-# Daily Paper Report -
+# Daily Paper Report - {date}
 
 ## General Report
 
@@ -15,10 +15,12 @@
 
 ## Specific Report (Based on Your Interests)
 
-{specific_content}
+### Theme-Based Synthesis
+
+{theme_synthesis}
 
 ---
 
-## Related Papers
+## Paper Details
 
-{related_papers}
+{paper_details}

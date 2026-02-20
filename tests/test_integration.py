@@ -60,6 +60,13 @@ class MockLLMProvider(LLMProvider):
                 "2. **Deep Reinforcement Learning for Robotics** - Author B - "
                 "Breakthrough in sim-to-real transfer"
             )
+        if "thematic clusters" in prompt.lower() or "group these papers" in prompt.lower():
+            return (
+                "### Machine Learning Advances\n\n"
+                "Several papers explore new approaches to machine learning.\n\n"
+                "### Optimization Techniques\n\n"
+                "Papers focus on improving training efficiency."
+            )
         return "This is a test LLM response."
 
     async def complete_json(self, prompt: str, system: str = "") -> dict:

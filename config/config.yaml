@@ -11,7 +11,7 @@ arxiv:
 matching:
   embedding_model: "all-MiniLM-L6-v2"
   embedding_top_n: 50        # coarse filtering candidate count
-  llm_top_k: 10              # final recommendation count
+  llm_top_k: 20              # final recommendation count
   similarity_threshold: 0.3  # minimum similarity threshold
 
 # LLM settings

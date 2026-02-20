@@ -330,11 +330,11 @@ class TestFileVerification:
         assert "{category_breakdown}" in content
         assert "{trending_topics}" in content
         assert "{highlight_papers}" in content
-        assert "{specific_content}" in content
-        assert "{related_papers}" in content
+        assert "{theme_synthesis}" in content
+        assert "{paper_details}" in content
 
     def test_email_template_has_sections(self, project_root):
         content = (project_root / "templates" / "email_template.md").read_text()
         assert "## General Report" in content
         assert "## Specific Report" in content
-        assert "## Related Papers" in content
+        assert "## Paper Details" in content

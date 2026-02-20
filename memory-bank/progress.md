@@ -137,15 +137,41 @@ Based on `memory-bank/feature-implementation-1.md` (FR-1 through FR-8).
 
 **Test results:** 24/24 new tests pass, all existing runnable tests unaffected. `ruff check` and `ruff format` clean.
 
+### Feature 2: Theme-Based Synthesis Report (Done)
+
+**Goal:** Replace paper-by-paper specific report with a theme-based synthesis narrative, and enhance Paper Details with comprehensive information.
+
+**Changes:**
+- **`config/config.yaml`** — Changed `llm_top_k` from 10 to 20 (more papers included in final recommendations).
+- **`src/report/generator.py`** — Major rewrite of `generate_specific()` and addition of 4 new private methods:
+  - `_build_theme_synthesis(ranked_papers, interests)` (async) — For >= 5 papers, sends paper titles, full abstracts, scores, and reasons to the LLM to group into 3-6 thematic clusters with `###` headings and flowing narrative paragraphs. For < 5 papers, delegates to `_build_simple_summary()`.
+  - `_build_simple_summary(ranked_papers)` — Simple bullet list for < 5 papers (no LLM call).
+  - `_build_fallback_list(ranked_papers)` — Numbered fallback list when LLM synthesis fails.
+  - `_build_paper_details(ranked_papers)` — Comprehensive details: full authors (no truncation), full abstract (no truncation), relevance reason, score, categories, arXiv link.
+  - Added `from __future__ import annotations` for Python 3.8 compatibility.
+- **`templates/email_template.md`** — Updated placeholders: `{specific_content}` → `{theme_synthesis}`, `{related_papers}` → `{paper_details}`. Section name `## Related Papers` → `## Paper Details`.
+- **`tests/test_report_generator.py`** — 29 tests (was 22):
+  - Fixed pre-existing `_make_ranked_papers` bug (append inside loop).
+  - Fixed pre-existing category breakdown assertions (table format).
+  - Updated `MockLLMProvider` with synthesis keyword dispatch.
+  - Replaced `test_no_llm_calls` with `test_no_llm_calls_for_few_papers` + `test_llm_called_for_synthesis`.
+  - Added 6 new tests: theme synthesis present, full authors no truncation, full abstract no truncation, llm_reason in paper details, simple summary for few papers, LLM failure fallback.
+- **`tests/test_integration.py`** — Added synthesis keyword dispatch to `MockLLMProvider.complete()`.
+- **`tests/test_error_handling.py`** — Updated template placeholder and section assertions.
+- **`memory-bank/architecture.md`** — Updated ReportGenerator section and Key Design Decisions table.
+
+**Test results:** 29/29 report generator tests pass, 10/10 integration tests pass, 16/16 error handling tests pass. `ruff check` and `ruff format` clean on modified files.
+
 ---
 
 ## All Phases Complete
 
-The implementation plan (Phases 0–14) is fully implemented, plus Feature 1. The project is feature-complete with:
-- 287 tests across 16 test files (271 original + 16 net new from expanding test_llm_claude_code.py from 8 to 24)
+The implementation plan (Phases 0–14) is fully implemented, plus Feature 1 and Feature 2. The project is feature-complete with:
+- 297 tests across 16 test files
 - Full error handling at all external service boundaries
 - `.env.example`, `.gitignore`, and email template verified
 - `claude_code` as default LLM provider (zero marginal cost)
+- Theme-based synthesis report with comprehensive Paper Details
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).
@@ -159,7 +185,7 @@ The implementation plan (Phases 0–14) is fully implemented, plus Feature 1. Th
 - PaperSummarizer tests use real `PaperStore` (not mocks) because `_get_paper_by_id()` accesses `store._get_conn()` directly. A concrete `MockLLMProvider` class (with `call_count`, `last_prompt`, `last_system` tracking) is used instead of `MagicMock` for cleaner async behavior. HTTP requests are patched at the module level (`src.summarizer.paper_summarizer.requests.get`).
 - PaperStore tests use `tmp_path` for isolated databases — no cleanup needed, no interference between tests. Each test class covers one CRUD domain (papers, interests, matches, summaries, reports).
 - LLMRanker tests use concrete mock `LLMProvider` subclasses (not `MagicMock`) for cleaner async behavior. `MockLLMProviderConcurrency` uses an `asyncio.Lock` counter + `asyncio.sleep(0.05)` to verify the semaphore limits parallel execution. Tests use `max_concurrent=1` when deterministic ordering matters (e.g., the descending sort test with a `VaryingScoreLLM`).
-- ReportGenerator tests also use concrete mock `LLMProvider` subclasses. The mock dispatches canned responses based on prompt keywords ("trending"/"emerging" vs "noteworthy"/"impactful"). `generate_specific` is tested to confirm it makes zero LLM calls — it only formats pre-scored data.
+- ReportGenerator tests also use concrete mock `LLMProvider` subclasses. The mock dispatches canned responses based on prompt keywords ("trending"/"emerging" vs "noteworthy"/"impactful" vs "thematic clusters"/"group these papers"). `generate_specific` with >= 5 papers calls LLM once for theme synthesis; with < 5 papers makes zero LLM calls.
 - `src/main.py` uses local imports inside `main()` (lazy imports for `load_config`, `setup_logging`, `DailyPipeline`, `PipelineScheduler`). Tests must patch at the definition site (`src.config.setup_logging`, `src.config.load_config`, `src.pipeline.DailyPipeline`, `src.scheduler.scheduler.PipelineScheduler`) rather than at `src.main.*`, because local imports don't create module-level attributes that `unittest.mock.patch` can find.
 - `scripts/run_pipeline.py` uses top-level imports, so its tests patch at `scripts.run_pipeline.*` directly.
 - Integration tests use a module-scoped `embedder` fixture (same pattern as `test_embedder.py` and `test_interest_manager.py`) to avoid reloading the ~80MB model per test. The `MockLLMProvider` is a concrete subclass (not `MagicMock`) with call counters and keyword-dispatched responses — same pattern used by `test_summarizer.py` and `test_ranker.py`.

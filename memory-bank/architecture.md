@@ -140,10 +140,10 @@ Markdown report generation for both general (all daily papers) and specific (int
   1. **Today's Overview** (`_build_overview`) — Pure Python; uses `collections.Counter` on each paper's primary category (first element of `categories` list). Formats top-10 categories as a Markdown table with an "Others" row summarizing remaining categories.
   2. **Trending Topics** (`_build_trending_topics`) — Sends all paper titles to the LLM to identify 3-5 emerging research topics. LLM prompt explicitly forbids headings to prevent visual hierarchy conflicts. Catches LLM exceptions gracefully.
   3. **Highlight Papers** (`_build_highlight_papers`) — Sends paper titles + first 150 chars of abstract + first 3 authors to the LLM to select 3-5 noteworthy papers. LLM prompt explicitly forbids headings. Catches LLM exceptions gracefully.
-- `generate_specific(ranked_papers, interests, run_date) -> str` — Formats pre-scored data from the ranker into Markdown. **Does NOT call the LLM.** Two sections:
-  1. Numbered list of ranked papers with `llm_score/10`, arXiv link, and blockquoted `llm_reason`.
-  2. "Paper Details" section with score, categories, authors (truncated to 5 with "et al."), abstract preview (first 300 chars), and arXiv link for each paper.
-  Handles edge cases: empty results, string-type authors/categories (not just lists).
+- `generate_specific(ranked_papers, interests, run_date) -> str` — Generates a theme-based synthesis report using the LLM, followed by comprehensive paper details. Two sections:
+  1. **Theme-based synthesis** (`_build_theme_synthesis`) — For >= 5 papers, sends paper titles, full abstracts, scores, and reasons to the LLM to group into 3-6 thematic clusters with `###` headings and flowing narrative paragraphs. On LLM failure, falls back to `_build_fallback_list` (numbered list with scores and arXiv links). For < 5 papers, uses `_build_simple_summary` (bullet list, no LLM call).
+  2. **Paper Details** (`_build_paper_details`) — Comprehensive details for each paper: score, categories, **full author list** (no truncation), **full abstract** (no truncation), relevance reason (`llm_reason`), and arXiv link.
+  Handles edge cases: empty results, string-type authors/categories (not just lists), LLM failures.
 
 Used by: `DailyPipeline` (Phase 10) for generating both report types after matching.
 
@@ -350,8 +350,10 @@ A reference Markdown template showing the expected email report structure with p
 | Concurrent LLM scoring | `asyncio.gather` + `Semaphore(max_concurrent)` | 5-10x faster than sequential for 50 candidates; semaphore prevents API rate-limit issues |
 | Graceful scoring failure | `_score_paper` catches all exceptions, returns score 0 | One failed LLM call should not abort scoring of remaining candidates |
 | Overview without LLM | `_build_overview` uses `Counter` in pure Python | Category counts are deterministic; no LLM cost for simple aggregation |
-| Specific report is LLM-free | `generate_specific` only formats pre-scored data | Scores and reasons already computed by `LLMRanker`; no redundant LLM calls |
-| Graceful LLM failure in reports | `_build_trending_topics`/`_build_highlight_papers` catch all exceptions | Report generation succeeds even if LLM is unavailable; error message replaces section content |
+| Theme-based synthesis | `generate_specific` calls LLM for >= 5 papers to group into thematic clusters | Provides a cohesive narrative instead of paper-by-paper listing; helps readers understand the research landscape |
+| Theme synthesis threshold | `_build_theme_synthesis` skips LLM for < 5 papers | Too few papers to form meaningful clusters; simple bullet list is clearer |
+| Full authors/abstracts in Paper Details | No truncation in `_build_paper_details` | Comprehensive details for each paper; truncation was too limiting for research use |
+| Graceful LLM failure in reports | `_build_trending_topics`/`_build_highlight_papers`/`_build_theme_synthesis` catch all exceptions | Report generation succeeds even if LLM is unavailable; fallback list replaces synthesis content |
 | Primary category = first element | `categories[0]` used for overview breakdown | arXiv lists primary category first; consistent with how papers are categorized |
 | Email CSS inlining | `premailer.transform()` after wrapping in HTML template | Most email clients strip `<style>` tags; inline styles ensure consistent rendering |
 | SMTP in thread | `asyncio.to_thread(self._send_smtp, msg)` | `smtplib` is synchronous; wrapping in a thread avoids blocking the async event loop |

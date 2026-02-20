@@ -1,4 +1,4 @@
-"""Tests for ReportGenerator (Phase 7)."""
+"""Tests for ReportGenerator (Phase 7 + Feature 2: Theme-Based Synthesis)."""
 
 import pytest
 
@@ -12,7 +12,7 @@ from src.report.generator import ReportGenerator
 
 
 class MockLLMProvider(LLMProvider):
-    """Returns canned Markdown strings for trending topics and highlights."""
+    """Returns canned Markdown strings for trending topics, highlights, and synthesis."""
 
     TRENDING = (
         "- **Multi-modal reasoning**: 4 papers explore combining vision and language models.\n"
@@ -29,6 +29,16 @@ class MockLLMProvider(LLMProvider):
         "— Introduces a reward-model-free approach to RLHF."
     )
 
+    SYNTHESIS = (
+        "### Attention Mechanisms\n\n"
+        "Several papers explore novel attention approaches. "
+        "**Paper Title 0** and **Paper Title 1** both propose improvements "
+        "to transformer architectures.\n\n"
+        "### Optimization Methods\n\n"
+        "**Paper Title 2** and **Paper Title 3** focus on training efficiency "
+        "and optimization strategies for large models."
+    )
+
     def __init__(self):
         self.calls: list[str] = []
 
@@ -38,6 +48,8 @@ class MockLLMProvider(LLMProvider):
             return self.TRENDING
         if "noteworthy" in prompt.lower() or "impactful" in prompt.lower():
             return self.HIGHLIGHTS
+        if "thematic clusters" in prompt.lower() or "group these papers" in prompt.lower():
+            return self.SYNTHESIS
         return "LLM response"
 
     async def complete_json(self, prompt: str, system: str = "") -> dict:
@@ -92,7 +104,7 @@ def _make_ranked_papers(n: int) -> list[dict]:
         paper["llm_score"] = round(9.0 - i * 0.5, 1)
         paper["llm_reason"] = f"Reason for paper {i}"
         paper["embedding_score"] = round(0.9 - i * 0.05, 3)
-    papers.append(paper)
+        papers.append(paper)
     return papers
 
 
@@ -126,9 +138,9 @@ class TestGenerateGeneral:
     async def test_overview_category_breakdown(self, gen):
         papers = _make_papers(10, categories_map={"cs.AI": 3, "cs.CL": 4, "cs.LG": 3})
         report = await gen.generate_general(papers, "2025-01-15")
-        assert "cs.AI: 3" in report
-        assert "cs.CL: 4" in report
-        assert "cs.LG: 3" in report
+        assert "| cs.AI | 3 |" in report
+        assert "| cs.CL | 4 |" in report
+        assert "| cs.LG | 3 |" in report
 
     @pytest.mark.asyncio
     async def test_trending_topics_section_present(self, gen):
@@ -172,7 +184,7 @@ class TestGenerateGeneral:
 
 
 # ---------------------------------------------------------------------------
-# Step 7.2 — Specific Report Tests
+# Step 7.2 — Specific Report Tests (Theme-Based Synthesis)
 # ---------------------------------------------------------------------------
 
 
@@ -218,11 +230,11 @@ class TestGenerateSpecific:
             assert paper["llm_reason"] in report
 
     @pytest.mark.asyncio
-    async def test_related_papers_section(self, gen):
+    async def test_paper_details_section(self, gen):
         ranked = _make_ranked_papers(3)
         interests = [{"type": "keyword", "value": "transformers"}]
         report = await gen.generate_specific(ranked, interests, "2025-01-15")
-        assert "## Related Papers" in report
+        assert "## Paper Details" in report
 
     @pytest.mark.asyncio
     async def test_arxiv_links_present(self, gen):
@@ -233,12 +245,29 @@ class TestGenerateSpecific:
             assert f"https://arxiv.org/abs/{paper['arxiv_id']}" in report
 
     @pytest.mark.asyncio
-    async def test_no_llm_calls(self, gen, llm):
-        """generate_specific should NOT call the LLM."""
+    async def test_no_llm_calls_for_few_papers(self, gen, llm):
+        """generate_specific with < 5 papers should NOT call the LLM."""
         ranked = _make_ranked_papers(3)
         interests = [{"type": "keyword", "value": "transformers"}]
         await gen.generate_specific(ranked, interests, "2025-01-15")
         assert len(llm.calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_llm_called_for_synthesis(self, gen, llm):
+        """generate_specific with >= 5 papers should call the LLM once for synthesis."""
+        ranked = _make_ranked_papers(6)
+        interests = [{"type": "keyword", "value": "transformers"}]
+        await gen.generate_specific(ranked, interests, "2025-01-15")
+        assert len(llm.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_theme_synthesis_present(self, gen):
+        """With >= 5 papers, theme synthesis content should appear."""
+        ranked = _make_ranked_papers(6)
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific(ranked, interests, "2025-01-15")
+        assert "### Attention Mechanisms" in report
+        assert "### Optimization Methods" in report
 
     @pytest.mark.asyncio
     async def test_empty_ranked_papers(self, gen):
@@ -248,12 +277,52 @@ class TestGenerateSpecific:
         assert "No papers matched" in report
 
     @pytest.mark.asyncio
-    async def test_authors_and_categories_in_related(self, gen):
+    async def test_authors_and_relevance_in_details(self, gen):
         ranked = _make_ranked_papers(2)
         interests = [{"type": "keyword", "value": "transformers"}]
         report = await gen.generate_specific(ranked, interests, "2025-01-15")
         assert "**Authors**:" in report
-        assert "**Categories**:" in report
+        assert "**Why this paper is relevant**:" in report
+
+    @pytest.mark.asyncio
+    async def test_full_authors_no_truncation(self, gen):
+        """All authors should appear — no truncation to 5."""
+        ranked = _make_ranked_papers(1)
+        ranked[0]["authors"] = [f"Author {i}" for i in range(10)]
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific(ranked, interests, "2025-01-15")
+        for i in range(10):
+            assert f"Author {i}" in report
+        assert "et al." not in report
+
+    @pytest.mark.asyncio
+    async def test_full_abstract_no_truncation(self, gen):
+        """Full abstract should appear — no 300-char truncation."""
+        ranked = _make_ranked_papers(1)
+        long_abstract = "A" * 500
+        ranked[0]["abstract"] = long_abstract
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific(ranked, interests, "2025-01-15")
+        assert long_abstract in report
+
+    @pytest.mark.asyncio
+    async def test_llm_reason_in_paper_details(self, gen):
+        """Each paper's relevance reason should appear in Paper Details."""
+        ranked = _make_ranked_papers(2)
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific(ranked, interests, "2025-01-15")
+        for paper in ranked:
+            assert paper["llm_reason"] in report
+            assert "**Why this paper is relevant**:" in report
+
+    @pytest.mark.asyncio
+    async def test_simple_summary_for_few_papers(self, gen):
+        """With < 5 papers, a simple bullet list should appear."""
+        ranked = _make_ranked_papers(3)
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific(ranked, interests, "2025-01-15")
+        for paper in ranked:
+            assert f"(Score: {paper['llm_score']}/10)" in report
 
 
 # ---------------------------------------------------------------------------
@@ -305,9 +374,29 @@ class TestEdgeCases:
         assert "Unable to generate" in report
 
     @pytest.mark.asyncio
+    async def test_llm_failure_theme_synthesis(self, gen):
+        """LLM failure during synthesis should fall back to a numbered list."""
+
+        class FailingLLM(LLMProvider):
+            async def complete(self, prompt, system=""):
+                raise RuntimeError("LLM unavailable")
+
+            async def complete_json(self, prompt, system=""):
+                raise RuntimeError("LLM unavailable")
+
+        gen_fail = ReportGenerator(FailingLLM())
+        ranked = _make_ranked_papers(6)
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen_fail.generate_specific(ranked, interests, "2025-01-15")
+        # Fallback list should still contain paper titles and Paper Details
+        for paper in ranked:
+            assert paper["title"] in report
+        assert "## Paper Details" in report
+
+    @pytest.mark.asyncio
     async def test_overview_with_single_category_paper(self, gen):
         """Paper with a single-element categories list should work."""
         papers = [_make_paper(0)]
         papers[0]["categories"] = ["cs.CV"]
         report = await gen.generate_general(papers, "2025-01-15")
-        assert "cs.CV: 1" in report
+        assert "| cs.CV | 1 |" in report

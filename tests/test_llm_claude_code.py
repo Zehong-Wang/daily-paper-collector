@@ -41,6 +41,8 @@ class TestClaudeCodeProviderInit:
         assert provider.model == "sonnet"
         assert provider.timeout == 120
         assert provider.max_retries == 3
+        assert provider.permission_mode == "dontAsk"
+        assert provider.disable_tools is True
 
     @patch("shutil.which", return_value="/custom/path/claude")
     def test_init_custom_values(self, _mock_which):
@@ -49,12 +51,16 @@ class TestClaudeCodeProviderInit:
             "model": "opus",
             "timeout": 60,
             "max_retries": 5,
+            "permission_mode": "default",
+            "disable_tools": False,
         }
         provider = ClaudeCodeProvider(config)
         assert provider.cli_path == "/custom/path/claude"
         assert provider.model == "opus"
         assert provider.timeout == 60
         assert provider.max_retries == 5
+        assert provider.permission_mode == "default"
+        assert provider.disable_tools is False
 
     @patch("shutil.which", return_value=None)
     def test_init_cli_not_found(self, _mock_which):
@@ -238,7 +244,73 @@ class TestClaudeCodeComplete:
         assert "--model" in call_args
         assert "--output-format" in call_args
         assert "--no-session-persistence" in call_args
+        assert "--permission-mode" in call_args
+        assert "--tools" in call_args
         assert "--system-prompt" in call_args
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/local/bin/claude")
+    async def test_complete_uses_stdout_error_when_stderr_empty(
+        self, _mock_which, claude_code_config
+    ):
+        provider = ClaudeCodeProvider(claude_code_config)
+        provider.max_retries = 1
+
+        error_envelope = {
+            "type": "result",
+            "subtype": "error",
+            "is_error": True,
+            "result": "Authentication required. Run setup-token.",
+        }
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (json.dumps(error_envelope).encode("utf-8"), b"")
+        mock_process.returncode = 1
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+            with pytest.raises(RuntimeError, match="Authentication required"):
+                await provider.complete("prompt")
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/local/bin/claude")
+    async def test_complete_strips_anthropic_api_key_by_default(
+        self, _mock_which, claude_code_config, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-invalid")
+        provider = ClaudeCodeProvider(claude_code_config)
+
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (_make_envelope("ok"), b"")
+        mock_process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
+            await provider.complete("prompt")
+
+        child_env = mock_exec.call_args.kwargs["env"]
+        assert "ANTHROPIC_API_KEY" not in child_env
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/local/bin/claude")
+    async def test_complete_keeps_anthropic_api_key_when_enabled(
+        self, _mock_which, monkeypatch
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-valid")
+        provider = ClaudeCodeProvider(
+            {
+                "cli_path": "claude",
+                "model": "sonnet",
+                "inherit_anthropic_api_key": True,
+            }
+        )
+
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (_make_envelope("ok"), b"")
+        mock_process.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec:
+            await provider.complete("prompt")
+
+        child_env = mock_exec.call_args.kwargs["env"]
+        assert child_env.get("ANTHROPIC_API_KEY") == "sk-ant-valid"
 
 
 # ---------------------------------------------------------------------------

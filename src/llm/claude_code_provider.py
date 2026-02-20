@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 
@@ -14,6 +15,10 @@ class ClaudeCodeProvider(LLMProvider):
         self.model = config.get("model", "sonnet")
         self.timeout = config.get("timeout", 120)
         self.max_retries = config.get("max_retries", 3)
+        self.permission_mode = config.get("permission_mode", "dontAsk")
+        self.disable_tools = config.get("disable_tools", True)
+        self.inherit_anthropic_api_key = config.get("inherit_anthropic_api_key", False)
+        self._logged_env_override = False
 
         if not shutil.which(self.cli_path):
             raise RuntimeError(
@@ -80,17 +85,29 @@ class ClaudeCodeProvider(LLMProvider):
             "--output-format",
             "json",
             "--no-session-persistence",
-            "--tools",
-            "",
         ]
+        if self.permission_mode:
+            cmd.extend(["--permission-mode", self.permission_mode])
+        if self.disable_tools:
+            cmd.extend(["--tools", ""])
         if system:
             cmd.extend(["--system-prompt", system])
+
+        child_env = os.environ.copy()
+        if not self.inherit_anthropic_api_key:
+            removed_key = child_env.pop("ANTHROPIC_API_KEY", None)
+            if removed_key and not self._logged_env_override:
+                self.logger.info(
+                    "Ignoring ANTHROPIC_API_KEY for claude_code provider to use local CLI auth/session."
+                )
+                self._logged_env_override = True
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=child_env,
         )
 
         try:
@@ -99,20 +116,43 @@ class ClaudeCodeProvider(LLMProvider):
                 timeout=self.timeout,
             )
         except asyncio.TimeoutError:
-            process.kill()
+            kill_result = process.kill()
+            if asyncio.iscoroutine(kill_result):
+                await kill_result
+            await process.wait()
             raise RuntimeError(f"Claude CLI timed out after {self.timeout}s")
 
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+
         if process.returncode != 0:
-            stderr_text = stderr.decode("utf-8", errors="replace").strip()
-            # Try to extract error message from JSON envelope in stderr
-            try:
-                err_envelope = json.loads(stderr_text)
-                if isinstance(err_envelope, dict) and err_envelope.get("result"):
-                    stderr_text = err_envelope["result"]
-            except (json.JSONDecodeError, TypeError):
-                pass
+            error_text = (
+                self._extract_envelope_message(stderr_text)
+                or self._extract_envelope_message(stdout_text)
+            )
+            if not error_text:
+                error_text = "No error details in stdout/stderr. Run 'claude --print --debug' to diagnose."
             raise RuntimeError(
-                f"Claude CLI exited with code {process.returncode}: {stderr_text}"
+                f"Claude CLI exited with code {process.returncode}: {error_text}"
             )
 
-        return stdout.decode("utf-8")
+        return stdout_text
+
+    @staticmethod
+    def _extract_envelope_message(text: str) -> str:
+        """Extract a human-readable message from raw text or a JSON envelope."""
+        if not text:
+            return ""
+        stripped = text.strip()
+        try:
+            envelope = json.loads(stripped)
+        except (json.JSONDecodeError, TypeError):
+            return stripped
+
+        if not isinstance(envelope, dict):
+            return stripped
+
+        for key in ("result", "error", "message"):
+            if envelope.get(key):
+                return str(envelope[key]).strip()
+        return stripped

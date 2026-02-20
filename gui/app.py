@@ -38,10 +38,16 @@ st.set_page_config(page_title="Daily Paper Collector", layout="wide")
 
 def _make_page(module_path: str):
     """Create a page callable that imports and renders the given view module."""
+    module_name = module_path.rsplit(".", 1)[-1]
+
     def page_fn():
         import importlib
         mod = importlib.import_module(module_path)
         mod.render(get_store())
+
+    # Streamlit may infer pathnames from callable names; keep names unique per page.
+    page_fn.__name__ = f"render_{module_name}"
+    page_fn.__qualname__ = page_fn.__name__
     return page_fn
 
 

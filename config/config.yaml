@@ -29,6 +29,7 @@ llm:
     timeout: 120             # seconds per CLI call
     max_retries: 3           # retry attempts for transient failures
     max_concurrent: 2        # concurrent calls for re-ranking
+    inherit_anthropic_api_key: false  # true to force ANTHROPIC_API_KEY passthrough
 
 # Email settings
 email:

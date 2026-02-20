@@ -59,5 +59,12 @@ def _show_summary(store, paper, mode):
             config = load_config()
             llm = create_llm_provider(config)
             summarizer = PaperSummarizer(llm, store)
-            summary = asyncio.run(summarizer.summarize(paper["id"], mode))
+            try:
+                summary = asyncio.run(summarizer.summarize(paper["id"], mode))
+            except Exception as e:
+                st.error(f"Failed to generate summary: {e}")
+                st.caption(
+                    "If using claude_code provider, verify Claude CLI login via 'claude --print \"hello\"'."
+                )
+                return
             st.markdown(summary)

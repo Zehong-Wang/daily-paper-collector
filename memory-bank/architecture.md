@@ -20,7 +20,7 @@ Streamlit GUI runs separately, reading from the same SQLite DB and invoking the 
 - `setup_logging(level)` — Configures root logger. Called once in `main.py` and `gui/app.py`.
 
 ### `config/config.yaml` — Runtime Configuration
-Sections: `arxiv` (categories, max_results), `matching` (model, top_n, top_k, threshold), `llm` (provider [default: `claude_code`] + sub-configs for openai/claude/claude_code [with timeout, max_retries, max_concurrent]), `email` (SMTP settings), `scheduler` (cron), `database` (path), `gui` (port).
+Sections: `arxiv` (categories, max_results_per_category, cutoff_days, page_size), `matching` (model, top_n, top_k, threshold), `llm` (provider [default: `claude_code`] + sub-configs for openai/claude/claude_code [with timeout, max_retries, max_concurrent]), `email` (SMTP settings), `scheduler` (cron), `database` (path), `gui` (port).
 
 ### `src/llm/base.py` — LLMProvider ABC
 Abstract base class defining the LLM contract:
@@ -56,10 +56,11 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 
 ### `src/fetcher/arxiv_fetcher.py` — ArxivFetcher
 - Fetches daily papers from user-configured arXiv categories using the `arxiv` Python library.
-- `__init__(config)` — reads `config["arxiv"]["categories"]` (list of category strings) and `config["arxiv"]["max_results_per_category"]`.
-- `fetch_today(cutoff_days=2)` — async entry point. Iterates over categories, calls `_fetch_category` via `asyncio.to_thread` to avoid blocking the event loop. Deduplicates results across categories. Default `cutoff_days=2` accounts for timezone/indexing delays.
-- `_fetch_category(category, cutoff_date)` — queries `arxiv.Search(query="cat:{category}", sort_by=SubmittedDate)`. The arXiv API sorts but does **not** filter by date, so filtering is done in Python (`published.date() >= cutoff_date`). Strips version suffix from arxiv_id via regex (`2501.12345v2` → `2501.12345`). Strips newlines from title and abstract. Constructs ar5iv URL from arxiv_id. **Error handling (Phase 14):** wraps the arXiv API calls in `try/except Exception` — on failure, logs the error and returns an empty list for that category so other categories can still succeed.
-- `_deduplicate(papers)` — removes duplicates by arxiv_id, keeping first occurrence. Needed because a paper can appear in multiple categories.
+- `__init__(config)` — reads `config["arxiv"]["categories"]`, `max_results_per_category` (default 500, safety cap), `cutoff_days` (default 1), and `page_size` (default 500). Creates a shared `arxiv.Client(page_size=..., delay_seconds=3.0, num_retries=3)` once at init (reused across categories).
+- `fetch_today(cutoff_days=None)` — async entry point. When `cutoff_days` is `None`, uses config default. Computes `start_date = today - cutoff_days` and `end_date = today`, passes both to `_fetch_category` via `loop.run_in_executor` to avoid blocking the event loop. Deduplicates results across categories.
+- `_build_date_query(category, start_date, end_date)` — builds an arXiv API query with **server-side date filtering**: `"cat:{category} AND submittedDate:[YYYYMMDDHHMM TO YYYYMMDDHHMM]"`. Start is 00:00 UTC of start_date, end is 23:59 UTC of end_date.
+- `_fetch_category(category, start_date, end_date)` — uses `_build_date_query` for server-side filtering via `arxiv.Search`, then applies a **client-side safety net** (`published.date() >= start_date`). Uses the shared `self.client` for auto-paginating iteration. Strips version suffix from arxiv_id, strips newlines from title/abstract, constructs ar5iv URL. **Error handling:** wraps API calls in `try/except Exception` — on failure, logs the error and returns an empty list for that category.
+- `_deduplicate(papers)` — removes duplicates by arxiv_id, keeping first occurrence.
 - Returns list of dicts with keys: `arxiv_id`, `title`, `authors`, `abstract`, `categories`, `published_date`, `pdf_url`, `ar5iv_url`.
 
 Used by: `DailyPipeline` (Phase 10), `InterestManager._fetch_abstract_from_arxiv` uses the same `arxiv` library directly (Phase 5).
@@ -98,7 +99,8 @@ Central persistence layer. All data flows through this class — papers, interes
 - `update_paper_embedding(paper_id, embedding_bytes)` — Updates BLOB column.
 - `get_papers_without_embeddings() -> list[dict]` — Papers with `embedding IS NULL`.
 - `get_papers_with_embeddings() -> list[dict]` — Papers with `embedding IS NOT NULL`, includes the BLOB.
-- `get_papers_by_date_with_embeddings(date) -> list[dict]` — Combines date filter + embedding filter. Used by the pipeline to match only today's papers.
+- `get_papers_by_date_with_embeddings(date) -> list[dict]` — Combines date filter + embedding filter.
+- `get_papers_by_ids_with_embeddings(paper_ids) -> list[int]` — Returns papers with given IDs that have embeddings. Used by the pipeline to match only newly inserted papers (avoids overlap across daily runs).
 
 **Interest methods:**
 - `save_interest(type, value, description=None) -> int` — Insert, return new ID.
@@ -208,7 +210,7 @@ Central orchestrator that wires all components together and executes the daily p
   2. **Save** — `store.save_papers()` persists with deduplication, returns only new papers
   3. **Embed** — `embedder.compute_embeddings(new_papers, store)` computes abstract embeddings
   4. **Check interests** — `interest_mgr.get_interests_with_embeddings()`; if empty, generates general report only and returns early
-  5. **Match** — `store.get_papers_by_date_with_embeddings(run_date)` gets today's embedded papers, then `embedder.find_similar()` computes top-N candidates
+  5. **Match** — `store.get_papers_by_ids_with_embeddings(new_paper_ids)` gets only newly inserted papers with embeddings (eliminates cross-run overlap), then `embedder.find_similar()` computes top-N candidates
   6. **Re-rank** — `ranker.rerank(candidates, interests, max_concurrent=self.max_concurrent)` scores via LLM for top-K
   7. **Save matches** — `store.save_match()` per ranked paper
   8. **General report** — `report_gen.generate_general(new_papers, run_date)`
@@ -342,8 +344,9 @@ A reference Markdown template showing the expected email report structure with p
 | Session persistence | `--no-session-persistence` flag | Prevents session file accumulation during automated pipeline runs |
 | Default provider | `claude_code` in `config.yaml` | Zero marginal LLM cost; other providers remain available via config switch |
 | Provider-specific concurrency | `max_concurrent` in provider config, read by pipeline | Claude Code subscription has lower rate limits than API providers; default 2 for `claude_code`, 5 for others |
-| ArXiv date filtering | Python-side filter after fetch | arXiv API sorts by SubmittedDate but doesn't filter by date |
-| ArXiv async wrapping | `asyncio.to_thread` around sync `arxiv.Client` | Avoids blocking the event loop; arxiv lib is synchronous |
+| ArXiv date filtering | Server-side `submittedDate` query + client-side safety net | Server-side filter scopes API results to the date range, avoiding the `max_results` truncation problem; client-side `published_date >= start_date` as belt-and-suspenders |
+| ArXiv Client reuse | Single `arxiv.Client` created in `__init__`, reused across categories | Reduces object churn; library is designed for client reuse |
+| ArXiv async wrapping | `loop.run_in_executor` around sync `arxiv.Client` | Avoids blocking the event loop; arxiv lib is synchronous; compatible with Python 3.8+ |
 | ArXiv ID normalization | Regex strip `v\d+$` suffix | Ensures consistent IDs for deduplication and DB storage |
 | Lazy model loading | `@property` with `_model = None` | Avoids loading ~80MB model until first embedding call |
 | Normalized embeddings | `normalize_embeddings=True` in encode | Dot product = cosine similarity, no need for separate normalization |
@@ -370,7 +373,7 @@ A reference Markdown template showing the expected email report structure with p
 | Abstract fallback on fetch failure | Catch `RuntimeError` from `fetch_paper_text`, use abstract | Ensures summarization always works even if ar5iv is unavailable or returns errors |
 | `_get_paper_by_id` via store's `_get_conn` | Direct SQL query through `store._get_conn()` | PaperStore only has `get_paper_by_arxiv_id`; avoids modifying the store API for a single consumer |
 | 3-tier abstract auto-fetch | DB → arXiv API → fallback to ID | Better embedding quality for paper interests without burdening the user; each tier logged for observability |
-| Match only today's papers | `get_papers_by_date_with_embeddings(run_date)` | Avoids re-matching historical papers; focused on daily discovery |
+| Match only new papers | `get_papers_by_ids_with_embeddings(new_paper_ids)` | Matches only papers newly inserted in the current run; eliminates overlap between consecutive daily reports. Previous approach used a date-range window which caused the same papers to appear in multiple reports. |
 | No-interest early return | Skip matching, still generate general report | Useful for first-time users who haven't configured interests yet |
 | Email failure resilience | `try/except` around `email_sender.send()` | Email failure should not prevent report saving; the run is still useful |
 | Pipeline top-level imports | All imports at module level in `pipeline.py` | Components are always needed; avoids lazy-import complexity in the orchestrator |

@@ -1,5 +1,5 @@
 import logging
-from datetime import date, timedelta
+from datetime import date
 
 from src.store.database import PaperStore
 from src.fetcher.arxiv_fetcher import ArxivFetcher
@@ -48,7 +48,6 @@ class DailyPipeline:
         13. Return summary dict.
         """
         run_date = date.today().isoformat()
-        cutoff_date = (date.today() - timedelta(days=2)).isoformat()
         self.logger.info("Starting daily pipeline for %s", run_date)
 
         # Step 1: Fetch
@@ -82,13 +81,11 @@ class DailyPipeline:
                 "email_sent": False,
             }
 
-        # Step 5-6: Match using date range (cutoff_date to run_date)
-        recent_papers = self.store.get_papers_in_date_range_with_embeddings(
-            cutoff_date, run_date
-        )
+        # Step 5-6: Match only newly inserted papers (avoids overlap with previous runs)
+        new_paper_ids = [p["id"] for p in new_papers]
+        recent_papers = self.store.get_papers_by_ids_with_embeddings(new_paper_ids)
         self.logger.info(
-            "Found %d papers with embeddings in range %s to %s",
-            len(recent_papers), cutoff_date, run_date,
+            "Found %d new papers with embeddings for matching", len(recent_papers),
         )
         top_n = self.config["matching"]["embedding_top_n"]
         threshold = self.config["matching"]["similarity_threshold"]

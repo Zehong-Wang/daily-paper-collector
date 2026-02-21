@@ -202,6 +202,22 @@ class PaperStore:
         finally:
             conn.close()
 
+    def get_papers_by_ids_with_embeddings(self, paper_ids: list[int]) -> list[dict]:
+        """Return papers with the given IDs that have embeddings computed."""
+        if not paper_ids:
+            return []
+        conn = self._get_conn()
+        try:
+            placeholders = ",".join("?" * len(paper_ids))
+            rows = conn.execute(
+                f"""SELECT * FROM papers
+                   WHERE id IN ({placeholders}) AND embedding IS NOT NULL""",
+                paper_ids,
+            ).fetchall()
+            return [self._row_to_paper(row) for row in rows]
+        finally:
+            conn.close()
+
     def _row_to_paper(self, row: sqlite3.Row) -> dict:
         """Convert a sqlite3.Row to a paper dict with deserialized JSON fields."""
         d = dict(row)

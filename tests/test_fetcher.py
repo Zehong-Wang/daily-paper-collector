@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -12,13 +14,18 @@ def config():
         "arxiv": {
             "categories": ["cs.AI", "cs.CL"],
             "max_results_per_category": 100,
+            "cutoff_days": 1,
+            "page_size": 100,
         }
     }
 
 
 @pytest.fixture
 def fetcher(config):
-    return ArxivFetcher(config)
+    with patch("src.fetcher.arxiv_fetcher.arxiv.Client"):
+        f = ArxivFetcher(config)
+    f.client = MagicMock()
+    return f
 
 
 def _make_mock_result(
@@ -62,10 +69,9 @@ class TestFetchToday:
             _make_mock_result("2501.00005", "Old Paper 2", "Old abstract 2", ["cs.AI"], old_date),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
             papers = await fetcher.fetch_today()
 
         # 3 recent papers per category * 2 categories, but deduplicated = 3
@@ -84,10 +90,9 @@ class TestFetchToday:
             _make_mock_result("2501.00002", "Old Paper", "Old abstract", ["cs.AI"], old_date),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
             papers = await fetcher.fetch_today(cutoff_days=15)
 
         # Both papers are within 15-day cutoff, but deduped across 2 categories = 2
@@ -110,16 +115,47 @@ class TestFetchToday:
             _make_mock_result("2501.00002", "Unique Paper", "Unique abstract", ["cs.AI"], today),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
             papers = await fetcher.fetch_today()
 
         # 2 unique papers, even though fetched from 2 categories
         arxiv_ids = [p["arxiv_id"] for p in papers]
         assert len(arxiv_ids) == len(set(arxiv_ids))
         assert len(papers) == 2
+
+    @pytest.mark.asyncio
+    async def test_default_cutoff_from_config(self, fetcher):
+        """When cutoff_days is not passed, uses config default (1)."""
+        fetcher.client.results.return_value = []
+
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
+            await fetcher.fetch_today()
+
+            # Verify the query includes a date range matching cutoff_days=1
+            call_args = MockSearch.call_args
+            query = call_args[1]["query"] if "query" in call_args[1] else call_args[0][0]
+            assert "submittedDate:" in query
+
+
+class TestBuildDateQuery:
+    def test_date_query_format(self, fetcher):
+        """Verify the submittedDate query string format."""
+        query = fetcher._build_date_query("cs.AI", date(2026, 2, 19), date(2026, 2, 20))
+        assert query == "cat:cs.AI AND submittedDate:[202602190000 TO 202602202359]"
+
+    def test_same_day_range(self, fetcher):
+        """Start and end on the same day produces a valid query."""
+        query = fetcher._build_date_query("cs.LG", date(2026, 2, 20), date(2026, 2, 20))
+        assert query == "cat:cs.LG AND submittedDate:[202602200000 TO 202602202359]"
+
+    def test_multi_day_range(self, fetcher):
+        """Multi-day range produces correct boundaries."""
+        query = fetcher._build_date_query("cs.CL", date(2026, 2, 15), date(2026, 2, 20))
+        assert "202602150000" in query
+        assert "202602202359" in query
+        assert query.startswith("cat:cs.CL AND submittedDate:")
 
 
 class TestArxivIdVersionStripping:
@@ -138,10 +174,9 @@ class TestArxivIdVersionStripping:
             ),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
             papers = await fetcher.fetch_today()
 
         assert papers[0]["arxiv_id"] == "2501.12345"
@@ -161,10 +196,9 @@ class TestArxivIdVersionStripping:
             ),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
             papers = await fetcher.fetch_today()
 
         assert papers[0]["arxiv_id"] == "2501.12345"
@@ -187,10 +221,9 @@ class TestPaperFieldExtraction:
             ),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
             papers = await fetcher.fetch_today()
 
         paper = papers[0]
@@ -235,9 +268,10 @@ class TestDeduplicate:
 
 class TestFetchCategory:
     def test_fetch_category_date_filter(self, fetcher):
-        """_fetch_category filters out papers before cutoff_date."""
+        """_fetch_category filters out papers before start_date."""
         today = date.today()
-        cutoff = today - timedelta(days=2)
+        start_date = today - timedelta(days=2)
+        end_date = today
         old_date = today - timedelta(days=5)
 
         mock_results = [
@@ -245,19 +279,19 @@ class TestFetchCategory:
             _make_mock_result("002", "Old", "Abstract", ["cs.AI"], old_date),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
-            with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-                papers = fetcher._fetch_category("cs.AI", cutoff)
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+            papers = fetcher._fetch_category("cs.AI", start_date, end_date)
 
         assert len(papers) == 1
         assert papers[0]["arxiv_id"] == "001"
 
     def test_fetch_category_all_filtered(self, fetcher):
         """_fetch_category returns empty list if all papers are too old."""
-        cutoff = date.today()
+        today = date.today()
+        start_date = today
+        end_date = today
 
         mock_results = [
             _make_mock_result(
@@ -265,11 +299,25 @@ class TestFetchCategory:
             ),
         ]
 
-        mock_client = MagicMock()
-        mock_client.results.return_value = mock_results
+        fetcher.client.results.return_value = mock_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
-            with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-                papers = fetcher._fetch_category("cs.AI", cutoff)
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+            papers = fetcher._fetch_category("cs.AI", start_date, end_date)
 
         assert papers == []
+
+    def test_fetch_category_uses_date_query(self, fetcher):
+        """_fetch_category passes submittedDate query to arxiv.Search."""
+        today = date.today()
+        start_date = today - timedelta(days=1)
+        end_date = today
+
+        fetcher.client.results.return_value = []
+
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
+            fetcher._fetch_category("cs.AI", start_date, end_date)
+
+            call_args = MockSearch.call_args
+            query = call_args[1]["query"] if "query" in call_args[1] else call_args[0][0]
+            assert "cat:cs.AI" in query
+            assert "submittedDate:" in query

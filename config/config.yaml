@@ -5,7 +5,9 @@ arxiv:
     - cs.CL
     - cs.LG
     - cs.CV
-  max_results_per_category: 200
+  max_results_per_category: 500
+  cutoff_days: 1       # days back from today (1 = yesterday+today, matching arXiv listing cycle)
+  page_size: 500       # results per API page for auto-pagination
 
 # Matching settings
 matching:

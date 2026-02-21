@@ -118,12 +118,17 @@ class TestArxivFetcherErrorHandling:
             "arxiv": {
                 "categories": ["cs.AI", "cs.CL"],
                 "max_results_per_category": 100,
+                "cutoff_days": 1,
+                "page_size": 100,
             }
         }
 
     @pytest.fixture
     def fetcher(self, config):
-        return ArxivFetcher(config)
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Client"):
+            f = ArxivFetcher(config)
+        f.client = MagicMock()
+        return f
 
     def test_connection_error_one_category_returns_papers_from_others(self, fetcher):
         """If one category raises ConnectionError, fetcher still returns papers from other categories."""
@@ -139,19 +144,17 @@ class TestArxivFetcherErrorHandling:
                 raise ConnectionError("Network unreachable")
             return iter(good_results)
 
-        mock_client = MagicMock()
-        mock_client.results = mock_client_results
+        fetcher.client.results = mock_client_results
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
-            with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
-                # Make Search return objects that pass the query through
-                def make_search(query, **kwargs):
-                    s = MagicMock()
-                    s.query = query
-                    return s
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
+            # Make Search return objects that pass the query through
+            def make_search(query, **kwargs):
+                s = MagicMock()
+                s.query = query
+                return s
 
-                MockSearch.side_effect = make_search
-                papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
+            MockSearch.side_effect = make_search
+            papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
 
         # Should have papers from cs.CL, not crash due to cs.AI failure
         assert len(papers) == 2
@@ -160,23 +163,19 @@ class TestArxivFetcherErrorHandling:
 
     def test_all_categories_fail_returns_empty(self, fetcher):
         """If all categories fail, returns empty list without crashing."""
-        mock_client = MagicMock()
-        mock_client.results.side_effect = ConnectionError("Network unreachable")
+        fetcher.client.results.side_effect = ConnectionError("Network unreachable")
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
-            with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-                papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+            papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
 
         assert papers == []
 
     def test_generic_exception_handled(self, fetcher):
         """Any Exception type is caught (not just ConnectionError)."""
-        mock_client = MagicMock()
-        mock_client.results.side_effect = RuntimeError("Unexpected error")
+        fetcher.client.results.side_effect = RuntimeError("Unexpected error")
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Client", return_value=mock_client):
-            with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-                papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+            papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
 
         assert papers == []
 

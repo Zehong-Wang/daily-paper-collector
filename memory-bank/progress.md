@@ -13,9 +13,9 @@
 - **Step 2.4** — `ClaudeCodeProvider` in `src/llm/claude_code_provider.py`. Calls `claude` CLI via `asyncio.create_subprocess_exec`, zero API cost via subscription.
 - **Tests** — 4 test files (`test_llm_base.py`, `test_llm_openai.py`, `test_llm_claude.py`, `test_llm_claude_code.py`). All tests pass. All mocked — no real API calls.
 
-### Phase 3: ArXiv Fetcher (Done)
-- **Step 3.1** — `ArxivFetcher` in `src/fetcher/arxiv_fetcher.py`. Fetches papers from configurable arXiv categories via the `arxiv` Python library. Python-side date filtering (arXiv API sorts but doesn't filter by date). Version suffix stripping from arxiv_id (e.g., `v2`). Cross-category deduplication. Uses `asyncio.to_thread` to avoid blocking the event loop.
-- **Tests** — `tests/test_fetcher.py` with 10 tests covering: date filtering, cutoff_days parameter, cross-category deduplication, version stripping, field extraction, and edge cases. All mocked — no real arXiv API calls.
+### Phase 3: ArXiv Fetcher (Done — Updated)
+- **Step 3.1** — `ArxivFetcher` in `src/fetcher/arxiv_fetcher.py`. Fetches papers from configurable arXiv categories via the `arxiv` Python library. **Server-side date filtering** via `submittedDate` query syntax (e.g., `cat:cs.AI AND submittedDate:[202602190000 TO 202602202359]`) scopes API results to the configured date range. Client-side `published_date >= start_date` filter retained as safety net. Configurable `cutoff_days` (default 1, matching arXiv's daily listing cycle) and `page_size` (default 500) via `config.yaml`. Shared `arxiv.Client` created once at init (reused across categories). Version suffix stripping from arxiv_id (e.g., `v2`). Cross-category deduplication. Uses `loop.run_in_executor` to avoid blocking the event loop (Python 3.8+ compatible).
+- **Tests** — `tests/test_fetcher.py` with 16 tests covering: date filtering, cutoff_days parameter, cross-category deduplication, version stripping, field extraction, date query format (`TestBuildDateQuery` — 3 tests), server-side query verification, and edge cases. All mocked — no real arXiv API calls.
 
 ### Phase 4: Embedding System (Done)
 - **Step 4.1** — `Embedder` class in `src/matcher/embedder.py`. Lazy-loads `sentence-transformers` model (`all-MiniLM-L6-v2`, 384 dims). Methods: `embed_text()` (single string → 1D array), `embed_texts()` (batch → 2D array), `serialize_embedding()` / `deserialize_embedding()` (numpy ↔ bytes for SQLite BLOBs), `compute_embeddings()` (batch-embeds paper abstracts via store), `compute_interest_embeddings()` (embeds interest text with optional description via store).
@@ -177,15 +177,40 @@ Based on `memory-bank/feature-implementation-1.md` (FR-1 through FR-8).
 
 ---
 
+### Feature 3: Server-Side ArXiv Date Filtering (Done)
+
+**Goal:** Fix two issues: (1) `cutoff_days=2` was too broad for fetching "today's papers", (2) `max_results=200` could miss papers in popular categories because client-side-only filtering depends on receiving all results first.
+
+**Changes:**
+- **`config/config.yaml`** — Added `cutoff_days: 1` (configurable, default matches arXiv listing cycle), `page_size: 500` (auto-pagination page size). Bumped `max_results_per_category` from 200 to 500 (now a safety cap).
+- **`src/fetcher/arxiv_fetcher.py`** — Major improvements:
+  - `__init__` reads `cutoff_days`, `page_size` from config. Creates a shared `arxiv.Client(page_size=..., delay_seconds=3.0, num_retries=3)` once at init (reused across categories).
+  - `fetch_today(cutoff_days=None)` uses config default when `None`. Computes `start_date`/`end_date` and passes both to `_fetch_category`.
+  - New `_build_date_query(category, start_date, end_date)` builds `submittedDate` query for server-side filtering.
+  - `_fetch_category(category, start_date, end_date)` uses `_build_date_query` for the `arxiv.Search` query, then applies client-side `published_date >= start_date` as safety net.
+  - Uses `loop.run_in_executor` instead of `asyncio.to_thread` for Python 3.8+ compatibility.
+- **`tests/test_fetcher.py`** — 16 tests (was 10):
+  - Updated fixtures: config includes `cutoff_days` and `page_size`; fetcher fixture patches `arxiv.Client` at init, replaces `fetcher.client` with mock.
+  - New `TestBuildDateQuery` class (3 tests — format verification, same-day range, multi-day range).
+  - New `test_default_cutoff_from_config` and `test_fetch_category_uses_date_query` tests.
+  - Updated `_fetch_category` calls from `(category, cutoff_date)` to `(category, start_date, end_date)`.
+- **`tests/test_error_handling.py`** — Updated `TestArxivFetcherErrorHandling` fixtures: config includes new keys, fetcher fixture patches `arxiv.Client` at init.
+- **`memory-bank/architecture.md`** — Updated ArxivFetcher section, config description, and Key Design Decisions table.
+
+**Test results:** 16/16 fetcher tests pass. `ruff check` and `ruff format` clean on modified files.
+
+---
+
 ## All Phases Complete
 
-The implementation plan (Phases 0–14) is fully implemented, plus Feature 1, Feature 2, and Feature 2b. The project is feature-complete with:
-- 297 tests across 16 test files
+The implementation plan (Phases 0–14) is fully implemented, plus Feature 1, Feature 2, Feature 2b, and Feature 3. The project is feature-complete with:
+- 303 tests across 16 test files
 - Full error handling at all external service boundaries
 - `.env.example`, `.gitignore`, and email template verified
 - `claude_code` as default LLM provider (zero marginal cost)
 - Theme-based synthesis report with comprehensive Paper Details
 - GUI Reports page with two-block specific report (synthesis + expandable cards)
+- Server-side arXiv date filtering with configurable cutoff
 
 ## Notes for Future Developers
 - Phase 2 was implemented before Phase 1 because it only depends on Phase 0 (no DB dependency).

@@ -31,7 +31,7 @@ def render(store):
         submitted = st.form_submit_button("Add Interest")
 
         if submitted and value:
-            from gui.app import get_embedder
+            from gui.state import get_embedder
             from src.interest.manager import InterestManager
 
             embedder = get_embedder()

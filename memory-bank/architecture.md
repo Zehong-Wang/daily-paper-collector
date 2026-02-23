@@ -269,7 +269,7 @@ Three metrics row (Papers Today, Matches Today, total Reports) via `st.metric`. 
 Used by: `gui/app.py` when page == "Dashboard".
 
 ### `gui/pages/papers.py` — Papers Browse & Summarize Page
-Date selector (`st.date_input`) and search box (`st.text_input`). Search calls `store.search_papers()`; date mode calls `store.get_papers_by_date()`. Papers in `st.expander` with authors, categories, abstract, arXiv link. Brief/Detailed summary buttons trigger `PaperSummarizer` on demand (cache-first via store).
+Date selector (`st.date_input`) and search box (`st.text_input`). Search calls `store.search_papers()`; date mode calls `store.get_papers_by_date()`. Papers displayed in a compact `st.dataframe` table (Title, Authors truncated to 3, Primary Category, Date, arXiv link). Row selection (`on_select="rerun"`, `selection_mode="single-row"`) shows a detail panel below the table with full authors, all categories, full abstract, arXiv link, and Brief/Detailed Summary buttons that trigger `PaperSummarizer` on demand.
 
 Used by: `gui/app.py` when page == "Papers".
 
@@ -285,7 +285,7 @@ Date dropdown from `store.get_all_report_dates()`. Two tabs: General Report and 
 
 **Specific Report tab** — Two blocks:
 1. **Theme synthesis narrative**: The stored specific report is split at the `---` divider (via `_split_specific_report()`). The synthesis portion (before the divider) is rendered as markdown.
-2. **Expandable paper cards**: Individual matched papers from `store.get_matches_by_date()` shown as `st.expander` widgets (via `_render_paper_cards()`). Each card shows: score, embedding score, categories, full authors (no truncation), full abstract (no truncation), relevance reason, and arXiv link.
+2. **Matched papers table**: Individual matched papers from `store.get_matches_by_date()` shown in a compact `st.dataframe` table (via `_render_matches_table()`). Columns: #, Title, Score ("{N}/10"), Primary Category, Relevance (truncated to 80 chars), arXiv link. Row selection shows full details below (via `_render_match_detail()`) including all scores, full authors, full abstract, full relevance reason, and arXiv link.
 
 Used by: `gui/app.py` when page == "Reports".
 
@@ -295,7 +295,10 @@ Read-only config display (`yaml.dump` in `st.code`). Editable sections: ArXiv ca
 Used by: `gui/app.py` when page == "Settings".
 
 ### `gui/components/paper_card.py` — Reusable Paper Card Component
-Renders a single paper in an `st.expander` with title, authors, categories, abstract, and arXiv link. Used by the Papers page.
+Renders a single paper in an `st.expander` with title, authors, categories, abstract, and arXiv link. Legacy component retained for potential reuse.
+
+### `gui/components/table_helpers.py` — Table Formatting Utilities
+Three helper functions for compact table display: `truncate_authors(authors, max_count=3)` truncates author lists with "et al.", `truncate_text(text, max_len=80)` truncates long text with "...", `get_primary_category(categories)` extracts the first category. Used by Papers page and Reports page.
 
 ### `gui/components/report_viewer.py` — Report Rendering Helper
 Simple `render_report(report_markdown)` function that calls `st.markdown()`. Used by the Reports page.

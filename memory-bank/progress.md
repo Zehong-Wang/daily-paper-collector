@@ -201,15 +201,30 @@ Based on `memory-bank/feature-implementation-1.md` (FR-1 through FR-8).
 
 ---
 
+### Feature 4: Table-Based Paper Layout in Streamlit GUI (Done)
+
+**Goal:** Replace vertically stacked `st.expander` cards with compact `st.dataframe` tables on both the Papers page and the Reports page (Specific Report tab). Users can scan papers at a glance and select a row to see full details.
+
+**Changes:**
+- **`gui/components/table_helpers.py`** — New file with 3 utility functions: `truncate_authors(authors, max_count=3)`, `truncate_text(text, max_len=80)`, `get_primary_category(categories)`.
+- **`gui/views/papers.py`** — Full rewrite: replaced `st.expander` loop with `st.dataframe` table (Title, Authors truncated, Primary Category, Date, arXiv LinkColumn). Row selection (`on_select="rerun"`) shows detail panel below with full info + Brief/Detailed Summary buttons.
+- **`gui/views/reports.py`** — Replaced `_render_paper_cards()` with `_render_matches_table()` + `_render_match_detail()`. Table columns: #, Title, Score, Primary Category, Relevance (truncated), arXiv link. Block 1 (theme synthesis) unchanged.
+- **`tests/test_table_helpers.py`** — 16 tests across 3 test classes: TestTruncateAuthors (6), TestTruncateText (5), TestGetPrimaryCategory (5).
+- **`memory-bank/architecture.md`** — Updated Papers page, Reports page, and components sections.
+
+**Test results:** 16/16 table helper tests pass. `ruff check` and `ruff format` clean.
+
+---
+
 ## All Phases Complete
 
-The implementation plan (Phases 0–14) is fully implemented, plus Feature 1, Feature 2, Feature 2b, and Feature 3. The project is feature-complete with:
-- 303 tests across 16 test files
+The implementation plan (Phases 0–14) is fully implemented, plus Feature 1, Feature 2, Feature 2b, Feature 3, and Feature 4. The project is feature-complete with:
+- 319 tests across 17 test files
 - Full error handling at all external service boundaries
 - `.env.example`, `.gitignore`, and email template verified
 - `claude_code` as default LLM provider (zero marginal cost)
 - Theme-based synthesis report with comprehensive Paper Details
-- GUI Reports page with two-block specific report (synthesis + expandable cards)
+- GUI Papers + Reports pages with compact `st.dataframe` table layout (row selection for details)
 - Server-side arXiv date filtering with configurable cutoff
 
 ## Notes for Future Developers

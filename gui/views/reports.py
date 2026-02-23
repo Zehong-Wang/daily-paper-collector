@@ -1,7 +1,12 @@
 import streamlit as st
+import pandas as pd
 
 from src.config import load_config
 from src.email.sender import EmailSender
+from gui.components.table_helpers import (
+    truncate_text,
+    get_primary_category,
+)
 
 
 def _split_specific_report(specific: str) -> tuple[str, str]:
@@ -19,47 +24,114 @@ def _split_specific_report(specific: str) -> tuple[str, str]:
     return synthesis, paper_details
 
 
-def _render_paper_cards(matches: list[dict]) -> None:
-    """Render expandable paper cards with comprehensive details."""
-    for i, m in enumerate(matches, 1):
-        title = m.get("title", "Unknown")
-        llm_score = m.get("llm_score", "N/A")
-        embedding_score = m.get("embedding_score", 0)
-        label = f"**{i}. {title}** — Score: {llm_score}/10"
-        with st.expander(label):
-            # Score and categories
-            categories = m.get("categories", [])
-            if isinstance(categories, list):
-                categories_str = ", ".join(categories)
-            else:
-                categories_str = str(categories)
-            st.markdown(
-                f"**Score**: {llm_score}/10 | "
-                f"**Embedding**: {embedding_score:.3f} | "
-                f"**Categories**: {categories_str}"
-            )
+def _render_matches_table(matches: list[dict]) -> None:
+    """Render matched papers as a compact table with row selection for details."""
+    df = pd.DataFrame(
+        [
+            {
+                "#": i,
+                "Title": m.get("title", "Unknown"),
+                "Score": f"{m.get('llm_score', 0)}/10",
+                "Category": get_primary_category(m.get("categories", [])),
+                "Relevance": truncate_text(m.get("llm_reason", "N/A"), 80),
+                "arXiv": f"https://arxiv.org/abs/{m.get('arxiv_id', '')}",
+            }
+            for i, m in enumerate(matches, 1)
+        ]
+    )
 
-            # Authors (full, no truncation)
-            authors = m.get("authors", [])
-            if isinstance(authors, list):
-                authors_str = ", ".join(authors)
-            else:
-                authors_str = str(authors)
-            st.markdown(f"**Authors**: {authors_str}")
+    event = st.dataframe(
+        df,
+        column_config={
+            "arXiv": st.column_config.LinkColumn("arXiv", display_text="Open"),
+        },
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="multi-row",
+    )
 
-            # Abstract (full, no truncation)
-            abstract = m.get("abstract", "")
-            if abstract:
-                st.markdown(f"**Abstract**: {abstract}")
+    selected_rows = event.selection.rows
+    if not selected_rows:
+        return
 
-            # Relevance reason
-            reason = m.get("llm_reason", "N/A")
-            st.markdown(f"**Why this paper is relevant**: {reason}")
+    selected_matches = [matches[i] for i in selected_rows]
 
-            # arXiv link
-            arxiv_id = m.get("arxiv_id", "")
-            if arxiv_id:
-                st.markdown(f"[Read on arXiv →](https://arxiv.org/abs/{arxiv_id})")
+    # Export selected matches as CSV
+    export_df = _build_match_export_df(selected_matches)
+    st.download_button(
+        f"Export {len(selected_matches)} paper(s) as CSV",
+        export_df.to_csv(index=False),
+        file_name="matched_papers.csv",
+        mime="text/csv",
+        key="match_export",
+    )
+
+    # Show details for each selected paper
+    for m in selected_matches:
+        with st.expander(f"**{m.get('title', 'Unknown')}**", expanded=True):
+            _render_match_detail(m)
+
+
+def _build_match_export_df(matches: list[dict]) -> pd.DataFrame:
+    """Build a DataFrame for CSV export of matched papers."""
+    rows = []
+    for m in matches:
+        authors = m.get("authors", [])
+        if isinstance(authors, list):
+            authors = ", ".join(authors)
+        categories = m.get("categories", [])
+        if isinstance(categories, list):
+            categories = ", ".join(categories)
+        rows.append(
+            {
+                "Title": m.get("title", ""),
+                "Authors": authors,
+                "Categories": categories,
+                "LLM Score": m.get("llm_score", ""),
+                "Embedding Score": m.get("embedding_score", ""),
+                "Relevance": m.get("llm_reason", ""),
+                "Abstract": m.get("abstract", ""),
+                "arXiv URL": f"https://arxiv.org/abs/{m.get('arxiv_id', '')}",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_match_detail(m: dict) -> None:
+    """Show full details for a selected matched paper."""
+    st.subheader(m.get("title", "Unknown"))
+
+    llm_score = m.get("llm_score", "N/A")
+    embedding_score = m.get("embedding_score", 0)
+    categories = m.get("categories", [])
+    if isinstance(categories, list):
+        categories_str = ", ".join(categories)
+    else:
+        categories_str = str(categories)
+    st.markdown(
+        f"**Score**: {llm_score}/10 | "
+        f"**Embedding**: {embedding_score:.3f} | "
+        f"**Categories**: {categories_str}"
+    )
+
+    authors = m.get("authors", [])
+    if isinstance(authors, list):
+        authors_str = ", ".join(authors)
+    else:
+        authors_str = str(authors)
+    st.markdown(f"**Authors**: {authors_str}")
+
+    abstract = m.get("abstract", "")
+    if abstract:
+        st.markdown(f"**Abstract**: {abstract}")
+
+    reason = m.get("llm_reason", "N/A")
+    st.markdown(f"**Why this paper is relevant**: {reason}")
+
+    arxiv_id = m.get("arxiv_id", "")
+    if arxiv_id:
+        st.markdown(f"[Read on arXiv →](https://arxiv.org/abs/{arxiv_id})")
 
 
 def render(store):
@@ -105,12 +177,12 @@ def render(store):
                 # Block 1: Theme-based synthesis narrative
                 st.markdown(synthesis)
 
-                # Block 2: Expandable paper-wise cards
+                # Block 2: Matched papers table
                 st.divider()
                 st.subheader("Paper Details")
                 matches = store.get_matches_by_date(selected_date)
                 if matches:
-                    _render_paper_cards(matches)
+                    _render_matches_table(matches)
                 else:
                     st.info("No matched papers for this date.")
             else:

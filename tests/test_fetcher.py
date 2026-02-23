@@ -54,89 +54,161 @@ def _make_mock_result(
     return result
 
 
+def _make_rss_papers(papers_data: list[dict]) -> list[dict]:
+    """Create paper dicts as returned by _fetch_category_rss."""
+    today = date.today().isoformat()
+    result = []
+    for p in papers_data:
+        result.append(
+            {
+                "arxiv_id": p.get("arxiv_id", "2501.00001"),
+                "title": p.get("title", "Test Paper"),
+                "authors": p.get("authors", ["Author One", "Author Two"]),
+                "abstract": p.get("abstract", "Test abstract"),
+                "categories": p.get("categories", ["cs.AI"]),
+                "published_date": p.get("published_date", today),
+                "pdf_url": f"https://arxiv.org/pdf/{p.get('arxiv_id', '2501.00001')}.pdf",
+                "ar5iv_url": f"https://ar5iv.labs.arxiv.org/html/{p.get('arxiv_id', '2501.00001')}",
+            }
+        )
+    return result
+
+
 class TestFetchToday:
     @pytest.mark.asyncio
-    async def test_filters_old_papers(self, fetcher):
-        """Papers older than cutoff_days are filtered out."""
-        today = date.today()
-        old_date = today - timedelta(days=10)
+    async def test_rss_returns_papers(self, fetcher):
+        """fetch_today uses RSS and returns papers."""
+        papers_ai = _make_rss_papers([
+            {"arxiv_id": "2501.00001", "title": "Paper A"},
+            {"arxiv_id": "2501.00002", "title": "Paper B"},
+        ])
+        papers_cl = _make_rss_papers([
+            {"arxiv_id": "2501.00003", "title": "Paper C"},
+        ])
 
-        mock_results = [
-            _make_mock_result("2501.00001", "Recent Paper 1", "Abstract 1", ["cs.AI"], today),
-            _make_mock_result("2501.00002", "Recent Paper 2", "Abstract 2", ["cs.AI"], today),
-            _make_mock_result("2501.00003", "Recent Paper 3", "Abstract 3", ["cs.AI"], today),
-            _make_mock_result("2501.00004", "Old Paper 1", "Old abstract 1", ["cs.AI"], old_date),
-            _make_mock_result("2501.00005", "Old Paper 2", "Old abstract 2", ["cs.AI"], old_date),
-        ]
+        def mock_rss(category):
+            if category == "cs.AI":
+                return papers_ai
+            return papers_cl
 
-        fetcher.client.results.return_value = mock_results
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+        with patch.object(fetcher, "_fetch_category_rss", side_effect=mock_rss):
             papers = await fetcher.fetch_today()
 
-        # 3 recent papers per category * 2 categories, but deduplicated = 3
         assert len(papers) == 3
-        for paper in papers:
-            assert "Old" not in paper["title"]
-
-    @pytest.mark.asyncio
-    async def test_cutoff_days_parameter(self, fetcher):
-        """With a larger cutoff_days, older papers should be included."""
-        today = date.today()
-        old_date = today - timedelta(days=10)
-
-        mock_results = [
-            _make_mock_result("2501.00001", "Recent Paper", "Abstract", ["cs.AI"], today),
-            _make_mock_result("2501.00002", "Old Paper", "Old abstract", ["cs.AI"], old_date),
-        ]
-
-        fetcher.client.results.return_value = mock_results
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = await fetcher.fetch_today(cutoff_days=15)
-
-        # Both papers are within 15-day cutoff, but deduped across 2 categories = 2
-        assert len(papers) == 2
 
     @pytest.mark.asyncio
     async def test_deduplication_across_categories(self, fetcher):
         """Papers appearing in multiple categories are deduplicated."""
-        today = date.today()
+        papers_ai = _make_rss_papers([
+            {"arxiv_id": "2501.00001", "title": "Shared Paper"},
+            {"arxiv_id": "2501.00002", "title": "Unique Paper"},
+        ])
+        papers_cl = _make_rss_papers([
+            {"arxiv_id": "2501.00001", "title": "Shared Paper"},
+        ])
 
-        # Same paper appears in both categories
-        mock_results = [
-            _make_mock_result(
-                "2501.00001",
-                "Shared Paper",
-                "Shared abstract",
-                ["cs.AI", "cs.CL"],
-                today,
-            ),
-            _make_mock_result("2501.00002", "Unique Paper", "Unique abstract", ["cs.AI"], today),
-        ]
+        def mock_rss(category):
+            if category == "cs.AI":
+                return papers_ai
+            return papers_cl
 
-        fetcher.client.results.return_value = mock_results
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+        with patch.object(fetcher, "_fetch_category_rss", side_effect=mock_rss):
             papers = await fetcher.fetch_today()
 
-        # 2 unique papers, even though fetched from 2 categories
         arxiv_ids = [p["arxiv_id"] for p in papers]
         assert len(arxiv_ids) == len(set(arxiv_ids))
         assert len(papers) == 2
 
     @pytest.mark.asyncio
-    async def test_default_cutoff_from_config(self, fetcher):
-        """When cutoff_days is not passed, uses config default (1)."""
-        fetcher.client.results.return_value = []
+    async def test_rss_empty_falls_back_to_rest(self, fetcher):
+        """When RSS returns empty, falls back to REST API."""
+        rest_papers = _make_rss_papers([
+            {"arxiv_id": "2501.00001", "title": "REST Paper"},
+        ])
 
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
-            await fetcher.fetch_today()
+        with (
+            patch.object(fetcher, "_fetch_category_rss", return_value=[]),
+            patch.object(fetcher, "_fetch_via_rest_api", return_value=rest_papers) as mock_rest,
+        ):
+            papers = await fetcher.fetch_today()
 
-            # Verify the query includes a date range matching cutoff_days=1
-            call_args = MockSearch.call_args
-            query = call_args[1]["query"] if "query" in call_args[1] else call_args[0][0]
-            assert "submittedDate:" in query
+        mock_rest.assert_awaited_once()
+        assert len(papers) == 1
+        assert papers[0]["title"] == "REST Paper"
+
+    @pytest.mark.asyncio
+    async def test_rss_nonempty_skips_rest(self, fetcher):
+        """When RSS returns papers, REST API is NOT called."""
+        rss_papers = _make_rss_papers([
+            {"arxiv_id": "2501.00001", "title": "RSS Paper"},
+        ])
+
+        with (
+            patch.object(fetcher, "_fetch_category_rss", return_value=rss_papers),
+            patch.object(fetcher, "_fetch_via_rest_api") as mock_rest,
+        ):
+            papers = await fetcher.fetch_today()
+
+        mock_rest.assert_not_awaited()
+        assert len(papers) == 1
+
+
+class TestRSSFetching:
+    def test_extract_abstract_with_prefix(self, fetcher):
+        """Extracts abstract text after 'Abstract:' prefix."""
+        summary = "arXiv:2602.17676v1 Announce Type: new\nAbstract: The rapid deployment of LLMs."
+        result = fetcher._extract_abstract_from_rss(summary)
+        assert result == "The rapid deployment of LLMs."
+
+    def test_extract_abstract_with_html(self, fetcher):
+        """Strips HTML tags from the summary."""
+        summary = "<p>arXiv:2602.17676v1 Announce Type: new\nAbstract: Some text here.</p>"
+        result = fetcher._extract_abstract_from_rss(summary)
+        assert result == "Some text here."
+
+    def test_extract_abstract_no_prefix(self, fetcher):
+        """Returns full cleaned text when no 'Abstract:' prefix found."""
+        summary = "Just a plain summary text."
+        result = fetcher._extract_abstract_from_rss(summary)
+        assert result == "Just a plain summary text."
+
+    def test_fetch_category_rss_error_returns_empty(self, fetcher):
+        """RSS parse failure returns empty list."""
+        with patch("src.fetcher.arxiv_fetcher.feedparser.parse", side_effect=Exception("Network error")):
+            papers = fetcher._fetch_category_rss("cs.AI")
+        assert papers == []
+
+    def test_fetch_category_rss_skips_replace(self, fetcher):
+        """RSS entries with announce_type 'replace' are skipped."""
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        new_entry = MagicMock()
+        new_entry.get = lambda k, d="": {
+            "id": "oai:arXiv.org:2501.00001v1",
+            "summary": "arXiv:2501.00001v1 Announce Type: new\nAbstract: New paper.",
+            "title": "New Paper",
+            "author": "Alice, Bob",
+            "tags": [{"term": "cs.AI"}],
+        }.get(k, d)
+        new_entry.arxiv_announce_type = "new"
+
+        replace_entry = MagicMock()
+        replace_entry.get = lambda k, d="": {
+            "id": "oai:arXiv.org:2501.00002v2",
+            "summary": "arXiv:2501.00002v2 Announce Type: replace\nAbstract: Updated paper.",
+            "title": "Updated Paper",
+            "author": "Charlie",
+            "tags": [{"term": "cs.AI"}],
+        }.get(k, d)
+        replace_entry.arxiv_announce_type = "replace"
+
+        mock_feed.entries = [new_entry, replace_entry]
+
+        with patch("src.fetcher.arxiv_fetcher.feedparser.parse", return_value=mock_feed):
+            papers = fetcher._fetch_category_rss("cs.AI")
+
+        assert len(papers) == 1
+        assert papers[0]["arxiv_id"] == "2501.00001"
 
 
 class TestBuildDateQuery:
@@ -158,56 +230,109 @@ class TestBuildDateQuery:
         assert query.startswith("cat:cs.CL AND submittedDate:")
 
 
-class TestArxivIdVersionStripping:
-    @pytest.mark.asyncio
-    async def test_version_stripped_from_id(self, fetcher):
-        """Version suffix (e.g., v2) should be stripped from arxiv_id."""
+class TestFetchCategoryRest:
+    def test_fetch_category_rest_date_filter(self, fetcher):
+        """_fetch_category_rest filters out papers before start_date."""
+        today = date.today()
+        start_date = today - timedelta(days=2)
+        end_date = today
+        old_date = today - timedelta(days=5)
+
+        mock_results = [
+            _make_mock_result("001", "Recent", "Abstract", ["cs.AI"], today),
+            _make_mock_result("002", "Old", "Abstract", ["cs.AI"], old_date),
+        ]
+
+        fetcher.client.results.return_value = mock_results
+
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+            papers = fetcher._fetch_category_rest("cs.AI", start_date, end_date)
+
+        assert len(papers) == 1
+        assert papers[0]["arxiv_id"] == "001"
+
+    def test_fetch_category_rest_all_filtered(self, fetcher):
+        """_fetch_category_rest returns empty list if all papers are too old."""
         today = date.today()
 
         mock_results = [
             _make_mock_result(
-                "2501.12345v2",
-                "Versioned Paper",
-                "Abstract",
-                ["cs.AI"],
-                today,
+                "001", "Old", "Abstract", ["cs.AI"], date.today() - timedelta(days=10)
             ),
         ]
 
         fetcher.client.results.return_value = mock_results
 
         with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = await fetcher.fetch_today()
+            papers = fetcher._fetch_category_rest("cs.AI", today, today)
+
+        assert papers == []
+
+    def test_fetch_category_rest_uses_date_query(self, fetcher):
+        """_fetch_category_rest passes submittedDate query to arxiv.Search."""
+        today = date.today()
+        start_date = today - timedelta(days=1)
+        end_date = today
+
+        fetcher.client.results.return_value = []
+
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
+            fetcher._fetch_category_rest("cs.AI", start_date, end_date)
+
+            call_args = MockSearch.call_args
+            query = call_args[1]["query"] if "query" in call_args[1] else call_args[0][0]
+            assert "cat:cs.AI" in query
+            assert "submittedDate:" in query
+
+    def test_fetch_category_rest_error_returns_empty(self, fetcher):
+        """REST API failure returns empty list."""
+        today = date.today()
+        fetcher.client.results.side_effect = ConnectionError("Network error")
+
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+            papers = fetcher._fetch_category_rest("cs.AI", today, today)
+
+        assert papers == []
+
+
+class TestArxivIdVersionStripping:
+    def test_version_stripped_in_rest(self, fetcher):
+        """Version suffix (e.g., v2) should be stripped in REST results."""
+        today = date.today()
+        mock_results = [
+            _make_mock_result("2501.12345v2", "Versioned Paper", "Abstract", ["cs.AI"], today),
+        ]
+        fetcher.client.results.return_value = mock_results
+
+        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
+            papers = fetcher._fetch_category_rest("cs.AI", today - timedelta(days=1), today)
 
         assert papers[0]["arxiv_id"] == "2501.12345"
 
-    @pytest.mark.asyncio
-    async def test_id_without_version_unchanged(self, fetcher):
-        """IDs without version suffix remain unchanged."""
-        today = date.today()
+    def test_version_stripped_in_rss(self, fetcher):
+        """Version suffix should be stripped from RSS entry IDs."""
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        entry = MagicMock()
+        entry.get = lambda k, d="": {
+            "id": "oai:arXiv.org:2501.12345v2",
+            "summary": "Abstract: Test paper.",
+            "title": "Test Paper",
+            "author": "Alice",
+            "tags": [{"term": "cs.AI"}],
+        }.get(k, d)
+        entry.arxiv_announce_type = "new"
+        mock_feed.entries = [entry]
 
-        mock_results = [
-            _make_mock_result(
-                "2501.12345",
-                "No Version Paper",
-                "Abstract",
-                ["cs.AI"],
-                today,
-            ),
-        ]
-
-        fetcher.client.results.return_value = mock_results
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = await fetcher.fetch_today()
+        with patch("src.fetcher.arxiv_fetcher.feedparser.parse", return_value=mock_feed):
+            papers = fetcher._fetch_category_rss("cs.AI")
 
         assert papers[0]["arxiv_id"] == "2501.12345"
 
 
 class TestPaperFieldExtraction:
-    @pytest.mark.asyncio
-    async def test_paper_dict_fields(self, fetcher):
-        """Verify all expected fields are present and correctly extracted."""
+    def test_paper_dict_fields_from_rest(self, fetcher):
+        """Verify all expected fields are present from REST API."""
         today = date.today()
 
         mock_results = [
@@ -224,7 +349,7 @@ class TestPaperFieldExtraction:
         fetcher.client.results.return_value = mock_results
 
         with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = await fetcher.fetch_today()
+            papers = fetcher._fetch_category_rest("cs.AI", today - timedelta(days=1), today)
 
         paper = papers[0]
         assert paper["arxiv_id"] == "2501.99999"
@@ -264,60 +389,3 @@ class TestDeduplicate:
         ]
         result = fetcher._deduplicate(papers)
         assert len(result) == 2
-
-
-class TestFetchCategory:
-    def test_fetch_category_date_filter(self, fetcher):
-        """_fetch_category filters out papers before start_date."""
-        today = date.today()
-        start_date = today - timedelta(days=2)
-        end_date = today
-        old_date = today - timedelta(days=5)
-
-        mock_results = [
-            _make_mock_result("001", "Recent", "Abstract", ["cs.AI"], today),
-            _make_mock_result("002", "Old", "Abstract", ["cs.AI"], old_date),
-        ]
-
-        fetcher.client.results.return_value = mock_results
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = fetcher._fetch_category("cs.AI", start_date, end_date)
-
-        assert len(papers) == 1
-        assert papers[0]["arxiv_id"] == "001"
-
-    def test_fetch_category_all_filtered(self, fetcher):
-        """_fetch_category returns empty list if all papers are too old."""
-        today = date.today()
-        start_date = today
-        end_date = today
-
-        mock_results = [
-            _make_mock_result(
-                "001", "Old", "Abstract", ["cs.AI"], date.today() - timedelta(days=10)
-            ),
-        ]
-
-        fetcher.client.results.return_value = mock_results
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = fetcher._fetch_category("cs.AI", start_date, end_date)
-
-        assert papers == []
-
-    def test_fetch_category_uses_date_query(self, fetcher):
-        """_fetch_category passes submittedDate query to arxiv.Search."""
-        today = date.today()
-        start_date = today - timedelta(days=1)
-        end_date = today
-
-        fetcher.client.results.return_value = []
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
-            fetcher._fetch_category("cs.AI", start_date, end_date)
-
-            call_args = MockSearch.call_args
-            query = call_args[1]["query"] if "query" in call_args[1] else call_args[0][0]
-            assert "cat:cs.AI" in query
-            assert "submittedDate:" in query

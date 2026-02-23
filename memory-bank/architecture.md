@@ -55,11 +55,14 @@ Used by: `LLMRanker`, `ReportGenerator`, `PaperSummarizer`.
 - Config options in `config["llm"]["claude_code"]`: `cli_path`, `model`, `timeout`, `max_retries`, `max_concurrent`.
 
 ### `src/fetcher/arxiv_fetcher.py` — ArxivFetcher
-- Fetches daily papers from user-configured arXiv categories using the `arxiv` Python library.
-- `__init__(config)` — reads `config["arxiv"]["categories"]`, `max_results_per_category` (default 500, safety cap), `cutoff_days` (default 1), and `page_size` (default 500). Creates a shared `arxiv.Client(page_size=..., delay_seconds=3.0, num_retries=3)` once at init (reused across categories).
-- `fetch_today(cutoff_days=None)` — async entry point. When `cutoff_days` is `None`, uses config default. Computes `start_date = today - cutoff_days` and `end_date = today`, passes both to `_fetch_category` via `loop.run_in_executor` to avoid blocking the event loop. Deduplicates results across categories.
-- `_build_date_query(category, start_date, end_date)` — builds an arXiv API query with **server-side date filtering**: `"cat:{category} AND submittedDate:[YYYYMMDDHHMM TO YYYYMMDDHHMM]"`. Start is 00:00 UTC of start_date, end is 23:59 UTC of end_date.
-- `_fetch_category(category, start_date, end_date)` — uses `_build_date_query` for server-side filtering via `arxiv.Search`, then applies a **client-side safety net** (`published.date() >= start_date`). Uses the shared `self.client` for auto-paginating iteration. Strips version suffix from arxiv_id, strips newlines from title/abstract, constructs ar5iv URL. **Error handling:** wraps API calls in `try/except Exception` — on failure, logs the error and returns an empty list for that category.
+- Fetches daily papers from user-configured arXiv categories. Uses **RSS feeds** as the primary method (announcement date) with REST API as fallback (submission date).
+- `__init__(config)` — reads `config["arxiv"]["categories"]`, `max_results_per_category` (default 500, safety cap), `cutoff_days` (default 1), and `page_size` (default 500). Creates a shared `arxiv.Client(page_size=..., delay_seconds=3.0, num_retries=3)` once at init (reused for REST API fallback).
+- `fetch_today(cutoff_days=None)` — async entry point. Fetches from RSS feeds via `_fetch_category_rss` for each category. RSS feeds use **announcement date** (matching arxiv.org/list/ "new" listings). Falls back to `_fetch_via_rest_api` if RSS returns zero papers. Deduplicates across categories.
+- `_fetch_category_rss(category)` — parses the RSS feed at `https://rss.arxiv.org/rss/{category}` via `feedparser`. Only includes entries with `arxiv_announce_type` of `"new"` or `"cross"` (skips `"replace"` entries). Extracts abstract from summary field (strips `"arXiv:... Announce Type: ...\nAbstract: "` prefix). Parses comma-separated author string into a list. Uses `date.today()` as `published_date` (announcement date). **Error handling:** wraps `feedparser.parse()` in `try/except Exception` — on failure, logs the error and returns an empty list.
+- `_extract_abstract_from_rss(summary)` — strips HTML tags and the `"arXiv:... Abstract: "` prefix from RSS summary fields.
+- `_fetch_via_rest_api(cutoff_days=None)` — fallback path using the arXiv REST API with `submittedDate` filtering. Note: `submittedDate` ≠ announcement date; papers may be announced days after submission.
+- `_build_date_query(category, start_date, end_date)` — builds an arXiv API query with **server-side date filtering**: `"cat:{category} AND submittedDate:[YYYYMMDDHHMM TO YYYYMMDDHHMM]"`.
+- `_fetch_category_rest(category, start_date, end_date)` — REST API fetching for a single category. Uses `_build_date_query` for server-side filtering, applies client-side safety net (`published_date >= start_date`). **Error handling:** wraps API calls in `try/except Exception`.
 - `_deduplicate(papers)` — removes duplicates by arxiv_id, keeping first occurrence.
 - Returns list of dicts with keys: `arxiv_id`, `title`, `authors`, `abstract`, `categories`, `published_date`, `pdf_url`, `ar5iv_url`.
 
@@ -373,7 +376,7 @@ A reference Markdown template showing the expected email report structure with p
 | Session persistence | `--no-session-persistence` flag | Prevents session file accumulation during automated pipeline runs |
 | Default provider | `claude_code` in `config.yaml` | Zero marginal LLM cost; other providers remain available via config switch |
 | Provider-specific concurrency | `max_concurrent` in provider config, read by pipeline | Claude Code subscription has lower rate limits than API providers; default 2 for `claude_code`, 5 for others |
-| ArXiv date filtering | Server-side `submittedDate` query + client-side safety net | Server-side filter scopes API results to the date range, avoiding the `max_results` truncation problem; client-side `published_date >= start_date` as belt-and-suspenders |
+| ArXiv daily fetching | RSS feeds (`rss.arxiv.org`) as primary, REST API as fallback | RSS uses announcement date (matches arxiv.org/list/ "new" listings); REST API's `submittedDate` ≠ announcement date causing missed papers. `feedparser` library parses RSS. Fallback triggers when RSS returns 0 papers. |
 | ArXiv Client reuse | Single `arxiv.Client` created in `__init__`, reused across categories | Reduces object churn; library is designed for client reuse |
 | ArXiv async wrapping | `loop.run_in_executor` around sync `arxiv.Client` | Avoids blocking the event loop; arxiv lib is synchronous; compatible with Python 3.8+ |
 | ArXiv ID normalization | Regex strip `v\d+$` suffix | Ensures consistent IDs for deduplication and DB storage |

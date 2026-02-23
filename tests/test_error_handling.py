@@ -130,31 +130,44 @@ class TestArxivFetcherErrorHandling:
         f.client = MagicMock()
         return f
 
-    def test_connection_error_one_category_returns_papers_from_others(self, fetcher):
-        """If one category raises ConnectionError, fetcher still returns papers from other categories."""
-        today = date.today()
-        good_results = [
-            _make_mock_result("2501.00001", "Paper A", "Abstract A", ["cs.CL"], today),
-            _make_mock_result("2501.00002", "Paper B", "Abstract B", ["cs.CL"], today),
-        ]
+    def test_rss_error_one_category_returns_papers_from_others(self, fetcher):
+        """If one category's RSS fails, fetcher still returns papers from other categories."""
+        today = date.today().isoformat()
 
-        def mock_client_results(search):
-            query_str = search.query
-            if "cs.AI" in query_str:
+        # Build a mock feed that succeeds for cs.CL
+        good_feed = MagicMock()
+        good_feed.bozo = False
+        entry1 = MagicMock()
+        entry1.get = lambda k, d="": {
+            "id": "oai:arXiv.org:2501.00001v1",
+            "summary": "Abstract: Paper A abstract.",
+            "title": "Paper A",
+            "author": "Author A",
+            "tags": [{"term": "cs.CL"}],
+        }.get(k, d)
+        entry1.arxiv_announce_type = "new"
+        entry2 = MagicMock()
+        entry2.get = lambda k, d="": {
+            "id": "oai:arXiv.org:2501.00002v1",
+            "summary": "Abstract: Paper B abstract.",
+            "title": "Paper B",
+            "author": "Author B",
+            "tags": [{"term": "cs.CL"}],
+        }.get(k, d)
+        entry2.arxiv_announce_type = "new"
+        good_feed.entries = [entry1, entry2]
+
+        call_count = 0
+
+        def mock_parse(url):
+            nonlocal call_count
+            call_count += 1
+            if "cs.AI" in url:
                 raise ConnectionError("Network unreachable")
-            return iter(good_results)
+            return good_feed
 
-        fetcher.client.results = mock_client_results
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search") as MockSearch:
-            # Make Search return objects that pass the query through
-            def make_search(query, **kwargs):
-                s = MagicMock()
-                s.query = query
-                return s
-
-            MockSearch.side_effect = make_search
-            papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
+        with patch("src.fetcher.arxiv_fetcher.feedparser.parse", side_effect=mock_parse):
+            papers = asyncio.run(fetcher.fetch_today())
 
         # Should have papers from cs.CL, not crash due to cs.AI failure
         assert len(papers) == 2
@@ -162,20 +175,22 @@ class TestArxivFetcherErrorHandling:
         assert papers[1]["arxiv_id"] == "2501.00002"
 
     def test_all_categories_fail_returns_empty(self, fetcher):
-        """If all categories fail, returns empty list without crashing."""
-        fetcher.client.results.side_effect = ConnectionError("Network unreachable")
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
+        """If all categories fail via RSS and REST fallback also empty, returns empty list."""
+        with (
+            patch("src.fetcher.arxiv_fetcher.feedparser.parse", side_effect=ConnectionError("fail")),
+            patch.object(fetcher, "_fetch_via_rest_api", return_value=[]),
+        ):
+            papers = asyncio.run(fetcher.fetch_today())
 
         assert papers == []
 
     def test_generic_exception_handled(self, fetcher):
-        """Any Exception type is caught (not just ConnectionError)."""
-        fetcher.client.results.side_effect = RuntimeError("Unexpected error")
-
-        with patch("src.fetcher.arxiv_fetcher.arxiv.Search"):
-            papers = asyncio.run(fetcher.fetch_today(cutoff_days=2))
+        """Any Exception type is caught in RSS fetching."""
+        with (
+            patch("src.fetcher.arxiv_fetcher.feedparser.parse", side_effect=RuntimeError("Unexpected")),
+            patch.object(fetcher, "_fetch_via_rest_api", return_value=[]),
+        ):
+            papers = asyncio.run(fetcher.fetch_today())
 
         assert papers == []
 

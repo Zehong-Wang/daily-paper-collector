@@ -11,6 +11,7 @@ premailer>=3.10
 beautifulsoup4>=4.12
 lxml>=5.0
 requests>=2.31
+feedparser>=6.0
 pypdf>=5.0
 pyyaml>=6.0
 python-dotenv>=1.0

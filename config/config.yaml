@@ -33,6 +33,10 @@ llm:
     max_concurrent: 2        # concurrent calls for re-ranking
     inherit_anthropic_api_key: false  # true to force ANTHROPIC_API_KEY passthrough
 
+# Report settings
+report:
+  chinese: true            # generate Chinese version reports and summaries
+
 # Email settings
 email:
   enabled: true

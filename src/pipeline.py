@@ -29,6 +29,9 @@ class DailyPipeline:
         provider_config = config.get("llm", {}).get(provider_name, {})
         self.max_concurrent = provider_config.get("max_concurrent", 5)
 
+        # Chinese report generation toggle
+        self.chinese_enabled = config.get("report", {}).get("chinese", False)
+
     async def run(self) -> dict:
         """Execute the full daily pipeline. Return a summary dict.
 
@@ -72,7 +75,17 @@ class DailyPipeline:
             self.logger.warning("No interests configured. Skipping matching.")
             # Still generate general report using all fetched papers
             general = await self.report_gen.generate_general(papers, run_date)
-            self.store.save_report(run_date, general, "", len(papers), 0)
+            general_zh = None
+            if self.chinese_enabled:
+                general_zh = await self.report_gen.generate_general_zh(papers, run_date)
+            self.store.save_report(
+                run_date,
+                general,
+                "",
+                len(papers),
+                0,
+                general_report_zh=general_zh,
+            )
             return {
                 "date": run_date,
                 "papers_fetched": len(papers),
@@ -85,7 +98,8 @@ class DailyPipeline:
         new_paper_ids = [p["id"] for p in new_papers]
         recent_papers = self.store.get_papers_by_ids_with_embeddings(new_paper_ids)
         self.logger.info(
-            "Found %d new papers with embeddings for matching", len(recent_papers),
+            "Found %d new papers with embeddings for matching",
+            len(recent_papers),
         )
         top_n = self.config["matching"]["embedding_top_n"]
         threshold = self.config["matching"]["similarity_threshold"]
@@ -110,18 +124,41 @@ class DailyPipeline:
         general = await self.report_gen.generate_general(papers, run_date)
         specific = await self.report_gen.generate_specific(ranked, interests, run_date)
 
+        # Step 9b-10b: Chinese reports (if enabled)
+        general_zh = None
+        specific_zh = None
+        if self.chinese_enabled:
+            self.logger.info("Generating Chinese reports...")
+            general_zh = await self.report_gen.generate_general_zh(papers, run_date)
+            specific_zh = await self.report_gen.generate_specific_zh(ranked, interests, run_date)
+
         # Step 11: Email
         email_sent = False
         if self.config.get("email", {}).get("enabled", False):
             try:
-                await self.email_sender.send(general, specific, ranked, run_date)
+                await self.email_sender.send(
+                    general,
+                    specific,
+                    ranked,
+                    run_date,
+                    general_zh=general_zh,
+                    specific_zh=specific_zh,
+                )
                 email_sent = True
                 self.logger.info("Email sent successfully")
             except Exception as e:
                 self.logger.error("Email sending failed: %s", e)
 
         # Step 12: Save report
-        self.store.save_report(run_date, general, specific, len(papers), len(ranked))
+        self.store.save_report(
+            run_date,
+            general,
+            specific,
+            len(papers),
+            len(ranked),
+            general_report_zh=general_zh,
+            specific_report_zh=specific_zh,
+        )
 
         return {
             "date": run_date,

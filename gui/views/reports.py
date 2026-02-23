@@ -149,6 +149,8 @@ def render(store):
         # Send report via email button
         general = report.get("general_report", "")
         specific = report.get("specific_report", "")
+        general_zh = report.get("general_report_zh", "")
+        specific_zh = report.get("specific_report_zh", "")
 
         if general or specific:
             if st.button("Send Report via Email", type="primary"):
@@ -158,19 +160,31 @@ def render(store):
                         st.error("Email is not enabled in configuration.")
                     else:
                         sender = EmailSender(config)
-                        sender.send_sync(general, specific, selected_date)
+                        sender.send_sync(
+                            general,
+                            specific,
+                            selected_date,
+                            general_zh=general_zh or None,
+                            specific_zh=specific_zh or None,
+                        )
                         to_addrs = ", ".join(config["email"]["to"])
                         st.success(f"Report sent to {to_addrs}")
                 except Exception as e:
                     st.error(f"Failed to send email: {e}")
 
-        tab1, tab2 = st.tabs(["General Report", "Specific Report"])
-        with tab1:
+        # Build tab list: always English, plus Chinese if available
+        tab_names = ["General Report", "Specific Report"]
+        if general_zh or specific_zh:
+            tab_names.extend(["综合报告 (Chinese)", "个性化推荐 (Chinese)"])
+
+        tabs = st.tabs(tab_names)
+
+        with tabs[0]:
             if general:
                 st.markdown(general)
             else:
                 st.info("No general report for this date.")
-        with tab2:
+        with tabs[1]:
             if specific:
                 synthesis, _ = _split_specific_report(specific)
 
@@ -187,3 +201,25 @@ def render(store):
                     st.info("No matched papers for this date.")
             else:
                 st.info("No specific report for this date.")
+
+        # Chinese tabs (if available)
+        if general_zh or specific_zh:
+            with tabs[2]:
+                if general_zh:
+                    st.markdown(general_zh)
+                else:
+                    st.info("本日暂无中文综合报告。")
+            with tabs[3]:
+                if specific_zh:
+                    synthesis_zh, _ = _split_specific_report(specific_zh)
+                    st.markdown(synthesis_zh)
+
+                    st.divider()
+                    st.subheader("论文详情")
+                    matches = store.get_matches_by_date(selected_date)
+                    if matches:
+                        _render_matches_table(matches)
+                    else:
+                        st.info("本日暂无匹配论文。")
+                else:
+                    st.info("本日暂无中文个性化推荐报告。")

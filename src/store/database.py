@@ -63,14 +63,27 @@ class PaperStore:
                     run_date DATE NOT NULL,
                     general_report TEXT,
                     specific_report TEXT,
+                    general_report_zh TEXT,
+                    specific_report_zh TEXT,
                     paper_count INTEGER,
                     matched_count INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            # Migrate existing tables: add Chinese report columns if missing
+            self._migrate_add_column(conn, "daily_reports", "general_report_zh", "TEXT")
+            self._migrate_add_column(conn, "daily_reports", "specific_report_zh", "TEXT")
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _migrate_add_column(conn, table: str, column: str, col_type: str):
+        """Add a column to an existing table if it doesn't already exist."""
+        cursor = conn.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cursor.fetchall()}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
     def _get_conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -410,15 +423,27 @@ class PaperStore:
         specific_report: str,
         paper_count: int,
         matched_count: int,
+        general_report_zh: str = None,
+        specific_report_zh: str = None,
     ) -> int:
         """Insert a daily report record. Return new id."""
         conn = self._get_conn()
         try:
             cursor = conn.execute(
                 """INSERT INTO daily_reports
-                   (run_date, general_report, specific_report, paper_count, matched_count)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (run_date, general_report, specific_report, paper_count, matched_count),
+                   (run_date, general_report, specific_report,
+                    general_report_zh, specific_report_zh,
+                    paper_count, matched_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_date,
+                    general_report,
+                    specific_report,
+                    general_report_zh,
+                    specific_report_zh,
+                    paper_count,
+                    matched_count,
+                ),
             )
             conn.commit()
             return cursor.lastrowid

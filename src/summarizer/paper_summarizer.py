@@ -33,7 +33,14 @@ class PaperSummarizer:
             "bookmark",
             "add to lists",
         ]
-        section_markers = ["abstract", "introduction", "method", "experiment", "conclusion", "result"]
+        section_markers = [
+            "abstract",
+            "introduction",
+            "method",
+            "experiment",
+            "conclusion",
+            "result",
+        ]
         nav_hits = sum(marker in lower for marker in nav_markers)
         has_sections = any(marker in lower for marker in section_markers)
         return nav_hits >= 4 and not has_sections
@@ -82,7 +89,9 @@ class PaperSummarizer:
         if not full_text:
             raise RuntimeError(f"No extractable text found in {ar5iv_url}")
         if self._looks_like_navigation_shell(full_text):
-            raise RuntimeError(f"Extracted navigation shell content instead of paper body from {ar5iv_url}")
+            raise RuntimeError(
+                f"Extracted navigation shell content instead of paper body from {ar5iv_url}"
+            )
 
         # Truncate to max characters
         full_text = self._truncate_text(full_text)
@@ -176,10 +185,29 @@ class PaperSummarizer:
             paper_text = paper.get("abstract", "")
             self.logger.info(f"Using abstract for paper {paper_id}")
 
-        # Build prompt
-        system = "You are a scientific paper summarizer. Provide clear, accurate summaries."
-
-        if mode == "brief":
+        # Build prompt based on mode and language
+        if mode == "brief_zh":
+            system = "你是一位科学论文摘要专家。请提供清晰、准确的中文摘要。"
+            prompt = (
+                f"请用中文对以下论文进行 1-2 段的简要总结，"
+                f"涵盖核心贡献和方法论。\n\n"
+                f"标题: {paper['title']}\n\n"
+                f"论文内容:\n{paper_text}"
+            )
+        elif mode == "detailed_zh":
+            system = "你是一位科学论文摘要专家。请提供清晰、准确的中文结构化摘要。"
+            prompt = (
+                f"请用中文对以下论文进行结构化总结，包含以下部分：\n"
+                f"- **研究动机**: 为什么要做这项研究？\n"
+                f"- **研究方法**: 采用了什么方法？\n"
+                f"- **实验结果**: 进行了哪些实验，结果如何？\n"
+                f"- **主要结论**: 主要的发现和结论是什么？\n"
+                f"- **局限性**: 这项工作有哪些局限性？\n\n"
+                f"标题: {paper['title']}\n\n"
+                f"论文内容:\n{paper_text}"
+            )
+        elif mode == "brief":
+            system = "You are a scientific paper summarizer. Provide clear, accurate summaries."
             prompt = (
                 f"Summarize this paper in 1-2 paragraphs covering core contributions "
                 f"and methodology.\n\n"
@@ -187,6 +215,7 @@ class PaperSummarizer:
                 f"Paper content:\n{paper_text}"
             )
         else:  # detailed
+            system = "You are a scientific paper summarizer. Provide clear, accurate summaries."
             prompt = (
                 f"Provide a structured summary of this paper with the following sections:\n"
                 f"- **Motivation**: Why was this work done?\n"

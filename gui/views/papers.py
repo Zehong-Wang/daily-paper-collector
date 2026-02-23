@@ -19,9 +19,7 @@ def _compute_relevance_scores(papers, store):
         return {}
 
     interest_vecs = [
-        np.frombuffer(i["embedding"], dtype=np.float32)
-        for i in interests
-        if i.get("embedding")
+        np.frombuffer(i["embedding"], dtype=np.float32) for i in interests if i.get("embedding")
     ]
     if not interest_vecs:
         return {}
@@ -75,7 +73,9 @@ def render(store):
                 "Title": p["title"],
                 "Authors": truncate_authors(p["authors"]),
                 "Category": get_primary_category(p["categories"]),
-                "Relevance": f"{relevance_map[aid]:.3f}" if (aid := p.get("arxiv_id", "")) in relevance_map else "-",
+                "Relevance": f"{relevance_map[aid]:.3f}"
+                if (aid := p.get("arxiv_id", "")) in relevance_map
+                else "-",
                 "Date": p["published_date"],
                 "arXiv": p.get("pdf_url", ""),
             }
@@ -157,21 +157,34 @@ def _render_detail_panel(store, paper):
     st.markdown(paper["abstract"])
     st.markdown(f"[Read on arXiv →]({paper.get('pdf_url', '#')})")
 
-    # Summarize buttons
-    col1, col2 = st.columns(2)
+    # Summarize buttons (English)
+    st.markdown("**Summaries:**")
+    col1, col2, col3, col4 = st.columns(4)
     if col1.button("Brief Summary", key=f"brief_{paper['id']}"):
         _show_summary(store, paper, "brief")
     if col2.button("Detailed Summary", key=f"detailed_{paper['id']}"):
         _show_summary(store, paper, "detailed")
+    if col3.button("中文简要总结", key=f"brief_zh_{paper['id']}"):
+        _show_summary(store, paper, "brief_zh")
+    if col4.button("中文详细总结", key=f"detailed_zh_{paper['id']}"):
+        _show_summary(store, paper, "detailed_zh")
 
 
 def _show_summary(store, paper, mode):
     """Check cache or generate summary."""
+    mode_labels = {
+        "brief": "brief",
+        "detailed": "detailed",
+        "brief_zh": "中文简要",
+        "detailed_zh": "中文详细",
+    }
+    label = mode_labels.get(mode, mode)
+
     cached = store.get_summary(paper["id"], mode)
     if cached:
         st.markdown(cached["content"])
     else:
-        with st.spinner(f"Generating {mode} summary..."):
+        with st.spinner(f"Generating {label} summary..."):
             import asyncio
             from src.config import load_config
             from src.llm import create_llm_provider

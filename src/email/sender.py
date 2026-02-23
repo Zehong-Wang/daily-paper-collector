@@ -154,15 +154,39 @@ strong {{
 
         return premailer.transform(html_template)
 
+    def _combine_reports(
+        self,
+        general_report: str,
+        specific_report: str,
+        general_zh: str = None,
+        specific_zh: str = None,
+    ) -> str:
+        """Combine English and optional Chinese reports into a single Markdown string."""
+        parts = [general_report, "---", specific_report]
+
+        if general_zh or specific_zh:
+            parts.append("---")
+            if general_zh:
+                parts.append(general_zh)
+            if specific_zh:
+                parts.append("---")
+                parts.append(specific_zh)
+
+        return "\n\n".join(parts)
+
     def send_sync(
         self,
         general_report: str,
         specific_report: str,
         run_date: str,
+        general_zh: str = None,
+        specific_zh: str = None,
     ):
         """Synchronous version of send() for non-async contexts (e.g. Streamlit GUI)."""
         self.logger.info("Preparing email for %s", run_date)
-        combined_md = f"{general_report}\n\n---\n\n{specific_report}"
+        combined_md = self._combine_reports(
+            general_report, specific_report, general_zh, specific_zh
+        )
         html_content = self.render_markdown_to_html(combined_md)
         subject = f"{self.subject_prefix} {run_date}"
         msg = self._build_email(html_content, subject)
@@ -175,10 +199,12 @@ strong {{
         specific_report: str,
         ranked_papers: list[dict],
         run_date: str,
+        general_zh: str = None,
+        specific_zh: str = None,
     ):
         """Assemble and send the daily email.
 
-        1. Combine general_report + specific_report into one Markdown string.
+        1. Combine English + Chinese reports into one Markdown string.
         2. Convert to HTML via render_markdown_to_html().
         3. Create MIMEMultipart message with subject: "{subject_prefix} {run_date}".
         4. Attach HTML as MIMEText("...", "html").
@@ -189,7 +215,9 @@ strong {{
         self.logger.info("Preparing email for %s", run_date)
 
         # Combine reports
-        combined_md = f"{general_report}\n\n---\n\n{specific_report}"
+        combined_md = self._combine_reports(
+            general_report, specific_report, general_zh, specific_zh
+        )
 
         # Convert to HTML
         html_content = self.render_markdown_to_html(combined_md)

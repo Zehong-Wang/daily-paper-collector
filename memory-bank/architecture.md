@@ -20,7 +20,7 @@ Streamlit GUI runs separately, reading from the same SQLite DB and invoking the 
 - `setup_logging(level)` — Configures root logger. Called once in `main.py` and `gui/app.py`.
 
 ### `config/config.yaml` — Runtime Configuration
-Sections: `arxiv` (categories, max_results_per_category, cutoff_days, page_size), `matching` (model, top_n, top_k, threshold), `llm` (provider [default: `claude_code`] + sub-configs for openai/claude/claude_code [with timeout, max_retries, max_concurrent]), `email` (SMTP settings), `scheduler` (cron), `database` (path), `gui` (port).
+Sections: `arxiv` (categories, max_results_per_category, cutoff_days, page_size), `matching` (model, top_n, top_k, threshold), `llm` (provider [default: `claude_code`] + sub-configs for openai/claude/claude_code [with timeout, max_retries, max_concurrent]), `report` (chinese: true/false — enables Chinese report/summary generation), `email` (SMTP settings), `scheduler` (cron), `database` (path), `gui` (port).
 
 ### `src/llm/base.py` — LLMProvider ABC
 Abstract base class defining the LLM contract:
@@ -87,7 +87,8 @@ Used by: `DailyPipeline` (Phase 10) for coarse filtering, `InterestManager` (Pha
 Central persistence layer. All data flows through this class — papers, interests, matches, summaries, and reports.
 
 - `__init__(db_path)` — Stores path, calls `_init_db()` to create schema. Uses `logging.getLogger(__name__)`.
-- `_init_db()` — Creates all 5 tables via `CREATE TABLE IF NOT EXISTS` (idempotent). Enables `PRAGMA journal_mode=WAL` (concurrent reads during writes) and `PRAGMA foreign_keys=ON`.
+- `_init_db()` — Creates all 5 tables via `CREATE TABLE IF NOT EXISTS` (idempotent). Enables `PRAGMA journal_mode=WAL` (concurrent reads during writes) and `PRAGMA foreign_keys=ON`. Runs `_migrate_add_column()` to add `general_report_zh` and `specific_report_zh` columns to existing `daily_reports` tables (backward-compatible migration).
+- `_migrate_add_column(conn, table, column, col_type)` — Static method. Checks `PRAGMA table_info()` for existing columns; only runs `ALTER TABLE ADD COLUMN` if the column doesn't exist. Used for safe schema migration on existing databases.
 - `_get_conn() -> sqlite3.Connection` — Creates a new connection each call with `row_factory = sqlite3.Row` for dict-like access. Every public method opens and closes its own connection (no shared connection state — safe for multi-threaded access from Streamlit).
 - `_row_to_paper(row) -> dict` — Converts `sqlite3.Row` to dict, deserializing `authors` and `categories` from JSON strings back to Python lists.
 
@@ -118,8 +119,8 @@ Central persistence layer. All data flows through this class — papers, interes
 - `get_summary(paper_id, summary_type) -> dict | None` — Cache lookup for paper summarization.
 
 **Report methods:**
-- `save_report(run_date, general_report, specific_report, paper_count, matched_count) -> int`
-- `get_report_by_date(run_date) -> dict | None`
+- `save_report(run_date, general_report, specific_report, paper_count, matched_count, general_report_zh=None, specific_report_zh=None) -> int` — Persists both English and optional Chinese reports.
+- `get_report_by_date(run_date) -> dict | None` — Returns dict including `general_report_zh` and `specific_report_zh` fields.
 - `get_all_report_dates() -> list[str]` — Sorted descending.
 
 Used by: Every component that touches persistent data — `DailyPipeline`, `InterestManager`, `Embedder.compute_embeddings`, `PaperSummarizer`, all GUI pages.
@@ -146,8 +147,10 @@ Markdown report generation for both general (all daily papers) and specific (int
   1. **Theme-based synthesis** (`_build_theme_synthesis`) — For >= 5 papers, sends paper titles, full abstracts, scores, and reasons to the LLM to group into 3-6 thematic clusters with `###` headings and flowing narrative paragraphs. On LLM failure, falls back to `_build_fallback_list` (numbered list with scores and arXiv links). For < 5 papers, uses `_build_simple_summary` (bullet list, no LLM call).
   2. **Paper Details** (`_build_paper_details`) — Comprehensive details for each paper: score, categories, **full author list** (no truncation), **full abstract** (no truncation), relevance reason (`llm_reason`), and arXiv link.
   Handles edge cases: empty results, string-type authors/categories (not just lists), LLM failures.
+- `generate_general_zh(papers, run_date) -> str` — Chinese version of `generate_general`. Three sections: 今日概览 (`_build_overview_zh`), 热门研究方向 (`_build_trending_topics_zh`), 亮点论文 (`_build_highlight_papers_zh`). All LLM prompts use Chinese system messages and instruct the model to respond in Chinese.
+- `generate_specific_zh(ranked_papers, interests, run_date) -> str` — Chinese version of `generate_specific`. Theme synthesis via `_build_theme_synthesis_zh` (LLM groups papers into Chinese thematic clusters), fallback via `_build_fallback_list_zh`, simple summary via `_build_simple_summary_zh`. Paper details via `_build_paper_details_zh` with Chinese labels (评分, 分类, 作者, 摘要, 推荐理由).
 
-Used by: `DailyPipeline` (Phase 10) for generating both report types after matching.
+Used by: `DailyPipeline` (Phase 10) for generating both report types after matching. Chinese methods called conditionally when `config["report"]["chinese"]` is enabled.
 
 ### `src/email/sender.py` — EmailSender
 SMTP email delivery with a Markdown → HTML → CSS-inline rendering pipeline.
@@ -157,7 +160,9 @@ SMTP email delivery with a Markdown → HTML → CSS-inline rendering pipeline.
   1. Converts Markdown to HTML via `markdown.markdown()` with `tables` and `fenced_code` extensions.
   2. Wraps the HTML body in a styled HTML template with a `.wrapper` div (720px max-width) and comprehensive CSS: light gray background, blue-accented h2 headings with left border and background, green-accented blockquotes for LLM reasons, styled tables with alternating row colors, proper list spacing, and responsive viewport meta tag.
   3. Inlines all CSS via `premailer.transform()` — required because most email clients strip `<style>` tags.
-- `send(general_report, specific_report, ranked_papers, run_date)` — Async entry point. Combines both Markdown reports with a `---` separator, renders to HTML via `render_markdown_to_html()`, builds a MIME message via `_build_email()`, then sends via `_send_smtp()` wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
+- `send(general_report, specific_report, ranked_papers, run_date, general_zh=None, specific_zh=None)` — Async entry point. Combines English and optional Chinese Markdown reports via `_combine_reports()`, renders to HTML via `render_markdown_to_html()`, builds a MIME message via `_build_email()`, then sends via `_send_smtp()` wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
+- `send_sync(general_report, specific_report, run_date, general_zh=None, specific_zh=None)` — Synchronous variant used by the GUI. Same combine/render/send flow without async wrapping.
+- `_combine_reports(general, specific, general_zh=None, specific_zh=None) -> str` — Merges English and Chinese reports into a single Markdown document with `---` separators. Chinese sections appended after English sections when present.
 - `_build_email(html_content, subject) -> MIMEMultipart` — Constructs a `MIMEMultipart("alternative")` message with Subject, From, To headers and a single `MIMEText("...", "html")` attachment.
 - `_send_smtp(msg)` — Synchronous SMTP sending using `smtplib.SMTP` context manager: `starttls()` → `login()` → `send_message()`. Called from a thread via `asyncio.to_thread`. **Error handling (Phase 14):** wraps SMTP operations in `try/except smtplib.SMTPException` — logs the error and re-raises so the pipeline's existing try/except can handle it gracefully.
 
@@ -172,10 +177,12 @@ GUI-only component for on-demand paper summarization. Not part of the daily auto
 - `summarize(paper_id, mode="brief") -> str` — Async entry point. Cache-first: checks `store.get_summary(paper_id, mode)` and returns cached content immediately if found. Retrieves paper by integer ID via `_get_paper_by_id()`. Full-text fallback chain: `ar5iv` HTML → `pdf_url` extraction → abstract fallback. Builds a mode-specific prompt:
   - `"brief"`: asks for 1-2 paragraphs covering core contributions and methodology.
   - `"detailed"`: asks for structured sections (Motivation, Method, Experiments, Conclusions, Limitations).
-  Calls `llm.complete(prompt, system="You are a scientific paper summarizer...")`. Saves the result to cache via `store.save_summary()` with the LLM provider class name. Raises `ValueError` if `paper_id` is not found in the database.
+  - `"brief_zh"`: Chinese 1-2 paragraph summary. System prompt: "你是一位科学论文摘要专家。请提供清晰、准确的中文摘要。"
+  - `"detailed_zh"`: Chinese structured summary with sections: 研究动机, 研究方法, 实验结果, 主要结论, 局限性.
+  Calls `llm.complete(prompt, system=...)` with mode-appropriate system prompt. Saves the result to cache via `store.save_summary()` with the LLM provider class name. Raises `ValueError` if `paper_id` is not found in the database.
 - `_get_paper_by_id(paper_id) -> dict | None` — Queries papers table by integer `id` (PaperStore only exposes `get_paper_by_arxiv_id`). Accesses `store._get_conn()` directly, deserializes `authors` and `categories` from JSON. Returns `None` if not found.
 
-Used by: Streamlit GUI Papers page (Phase 12) for on-demand brief/detailed summaries. Summaries are cached in the `summaries` table to avoid redundant LLM calls.
+Used by: Streamlit GUI Papers page (Phase 12) for on-demand brief/detailed/brief_zh/detailed_zh summaries. Summaries are cached in the `summaries` table (keyed by `paper_id` + `summary_type`) to avoid redundant LLM calls.
 
 ### `src/interest/manager.py` — InterestManager
 Manages the three types of user interests (keyword, paper, reference_paper) with automatic embedding computation.
@@ -205,6 +212,7 @@ Central orchestrator that wires all components together and executes the daily p
   - `ReportGenerator(llm)` — Markdown report generation
   - `EmailSender(config)` — SMTP email delivery
   - Also reads `max_concurrent` from the active LLM provider's config (defaults to 5; `claude_code` uses 2).
+  - Reads `self.chinese_enabled` from `config["report"]["chinese"]` (defaults to `False`). When enabled, generates Chinese reports alongside English reports.
 - `run() -> dict` — Async method executing the 12-step pipeline:
   1. **Fetch** — `fetcher.fetch_today()` retrieves papers from arXiv
   2. **Save** — `store.save_papers()` persists with deduplication, returns only new papers
@@ -215,8 +223,9 @@ Central orchestrator that wires all components together and executes the daily p
   7. **Save matches** — `store.save_match()` per ranked paper
   8. **General report** — `report_gen.generate_general(new_papers, run_date)`
   9. **Specific report** — `report_gen.generate_specific(ranked, interests, run_date)`
-  10. **Email** — `email_sender.send()` if `config["email"]["enabled"]`; failures caught and logged
-  11. **Save report** — `store.save_report()` persists both reports
+  9b. **Chinese reports** (if `chinese_enabled`) — `report_gen.generate_general_zh()` and `report_gen.generate_specific_zh()` called after English reports
+  10. **Email** — `email_sender.send()` if `config["email"]["enabled"]`; passes Chinese reports when available; failures caught and logged
+  11. **Save report** — `store.save_report()` persists both English and Chinese reports
   12. **Return** — `{"date", "papers_fetched", "new_papers", "matches", "email_sent"}`
 
 Used by: `src/main.py` (Phase 11) in both `--mode run` and `--mode scheduler` modes. `scripts/run_pipeline.py` for CI/CD.
@@ -269,7 +278,7 @@ Three metrics row (Papers Today, Matches Today, total Reports) via `st.metric`. 
 Used by: `gui/app.py` when page == "Dashboard".
 
 ### `gui/pages/papers.py` — Papers Browse & Summarize Page
-Date selector (`st.date_input`) and search box (`st.text_input`). Search calls `store.search_papers()`; date mode calls `store.get_papers_by_date()`. Papers displayed in a compact `st.dataframe` table (Title, Authors truncated to 3, Primary Category, Date, arXiv link). Row selection (`on_select="rerun"`, `selection_mode="single-row"`) shows a detail panel below the table with full authors, all categories, full abstract, arXiv link, and Brief/Detailed Summary buttons that trigger `PaperSummarizer` on demand.
+Date selector (`st.date_input`) and search box (`st.text_input`). Search calls `store.search_papers()`; date mode calls `store.get_papers_by_date()`. Papers displayed in a compact `st.dataframe` table (Title, Authors truncated to 3, Primary Category, Date, arXiv link). Row selection (`on_select="rerun"`, `selection_mode="single-row"`) shows a detail panel below the table with full authors, all categories, full abstract, arXiv link, and four summary buttons: Brief Summary, Detailed Summary, 中文简要总结 (`brief_zh`), 中文详细总结 (`detailed_zh`). All four modes trigger `PaperSummarizer` on demand and are cached independently in the `summaries` table.
 
 Used by: `gui/app.py` when page == "Papers".
 
@@ -279,13 +288,19 @@ Lists current interests with type/value/description, embedding status (Y/N), and
 Used by: `gui/app.py` when page == "Interests".
 
 ### `gui/pages/reports.py` → `gui/views/reports.py` — Reports Viewer Page
-Date dropdown from `store.get_all_report_dates()`. Two tabs: General Report and Specific Report.
+Date dropdown from `store.get_all_report_dates()`. Dynamically builds tab list: always English tabs (General Report, Specific Report), plus Chinese tabs (综合报告, 个性化推荐) when Chinese report content exists for the selected date.
 
 **General Report tab**: Renders the full general report markdown (overview, trending topics, highlights).
 
 **Specific Report tab** — Two blocks:
 1. **Theme synthesis narrative**: The stored specific report is split at the `---` divider (via `_split_specific_report()`). The synthesis portion (before the divider) is rendered as markdown.
 2. **Matched papers table**: Individual matched papers from `store.get_matches_by_date()` shown in a compact `st.dataframe` table (via `_render_matches_table()`). Columns: #, Title, Score ("{N}/10"), Primary Category, Relevance (truncated to 80 chars), arXiv link. Row selection shows full details below (via `_render_match_detail()`) including all scores, full authors, full abstract, full relevance reason, and arXiv link.
+
+**综合报告 (Chinese) tab**: Renders `general_report_zh` markdown when available.
+
+**个性化推荐 (Chinese) tab**: Renders `specific_report_zh` synthesis + matched papers table (same as English Specific Report tab).
+
+**Send Report via Email** button passes both English and Chinese reports to `EmailSender.send_sync()`.
 
 Used by: `gui/app.py` when page == "Reports".
 
@@ -398,3 +413,9 @@ A reference Markdown template showing the expected email report structure with p
 | Per-category error isolation | `_fetch_category` catches `Exception`, returns `[]` | One failing arXiv category (network, API error) doesn't block papers from other categories |
 | SMTP error log-and-reraise | `_send_smtp` catches `SMTPException`, logs, re-raises | Pipeline's existing `try/except` around `email_sender.send()` handles it; error is observable in logs |
 | Email template as reference doc | `templates/email_template.md` not used programmatically | Documents expected email format for developers; actual content built by `ReportGenerator` in code |
+| Chinese report toggle | `config["report"]["chinese"]` boolean, defaults to `False` | Opt-in feature; avoids doubling LLM costs for users who don't need Chinese reports |
+| Chinese summary as separate modes | `brief_zh`/`detailed_zh` stored as distinct `summary_type` values | Leverages existing `summaries` table schema; no schema changes needed; cached independently from English summaries |
+| Chinese report DB columns | `general_report_zh`/`specific_report_zh` added to `daily_reports` | Stored alongside English reports for easy retrieval; nullable columns for backward compatibility |
+| Schema migration via PRAGMA | `_migrate_add_column()` checks `PRAGMA table_info()` before `ALTER TABLE` | Safe idempotent migration; existing databases gain new columns without data loss; no migration framework dependency |
+| Combined email for Chinese | `_combine_reports()` merges EN + ZH with `---` separators | Single email with both languages; avoids sending duplicate emails; users see all content in one place |
+| Dynamic GUI tabs for Chinese | Tabs added only when `general_report_zh`/`specific_report_zh` exist | No UI clutter when Chinese reports are not generated; graceful degradation |

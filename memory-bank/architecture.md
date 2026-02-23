@@ -119,9 +119,11 @@ Central persistence layer. All data flows through this class — papers, interes
 - `get_summary(paper_id, summary_type) -> dict | None` — Cache lookup for paper summarization.
 
 **Report methods:**
-- `save_report(run_date, general_report, specific_report, paper_count, matched_count, general_report_zh=None, specific_report_zh=None) -> int` — Persists both English and optional Chinese reports.
+- `save_report(run_date, general_report, specific_report, paper_count, matched_count, general_report_zh=None, specific_report_zh=None, report_type="daily") -> int` — Persists both English and optional Chinese reports. `report_type` can be `"daily"`, `"3day"`, or `"1week"`. Multi-day reports use `run_date` in range-label format `"start~end"` (e.g., `"2026-02-20~2026-02-22"`).
 - `get_report_by_date(run_date) -> dict | None` — Returns dict including `general_report_zh` and `specific_report_zh` fields.
-- `get_all_report_dates() -> list[str]` — Sorted descending.
+- `get_all_report_dates() -> list[str]` — Sorted descending. Returns distinct run_dates.
+- `get_all_report_entries() -> list[dict]` — Returns all report entries with metadata (`id`, `run_date`, `report_type`, `paper_count`, `matched_count`, `created_at`) sorted by `created_at DESC, id DESC`. Used by the Reports page for the type-aware report selector.
+- `get_report_by_id(report_id) -> dict | None` — Returns a single report by primary key. Needed to distinguish between daily and multi-day reports with different `run_date` formats.
 
 Used by: Every component that touches persistent data — `DailyPipeline`, `InterestManager`, `Embedder.compute_embeddings`, `PaperSummarizer`, all GUI pages.
 
@@ -139,16 +141,16 @@ Used by: `DailyPipeline` (Phase 10) as the fine-grained second stage after `Embe
 Markdown report generation for both general (all daily papers) and specific (interest-matched papers) reports.
 
 - `__init__(llm)` — Takes an `LLMProvider` instance. Uses `logging.getLogger(__name__)`.
-- `generate_general(papers, run_date) -> str` — Builds a complete Markdown general report with three sections:
+- `generate_general(papers, run_date, date_label=None) -> str` — Builds a complete Markdown general report. When `date_label` is provided (for multi-day reports, e.g. `"2026-02-20 ~ 2026-02-22"`), uses it in the header and switches to period-aware wording ("Period Overview" / "papers in this period" instead of "Today's Overview" / "new papers collected"). Three sections:
   1. **Today's Overview** (`_build_overview`) — Pure Python; uses `collections.Counter` on each paper's primary category (first element of `categories` list). Formats top-10 categories as a Markdown table with an "Others" row summarizing remaining categories.
   2. **Trending Topics** (`_build_trending_topics`) — Sends all paper titles to the LLM to identify 3-5 emerging research topics. LLM prompt explicitly forbids headings to prevent visual hierarchy conflicts. Catches LLM exceptions gracefully.
   3. **Highlight Papers** (`_build_highlight_papers`) — Sends paper titles + first 150 chars of abstract + first 3 authors to the LLM to select 3-5 noteworthy papers. LLM prompt explicitly forbids headings. Catches LLM exceptions gracefully.
-- `generate_specific(ranked_papers, interests, run_date) -> str` — Generates a theme-based synthesis report using the LLM, followed by comprehensive paper details. Two sections:
+- `generate_specific(ranked_papers, interests, run_date, date_label=None) -> str` — Generates a theme-based synthesis report using the LLM, followed by comprehensive paper details. When `date_label` is provided, uses "in this period" instead of "today" in intro text. Two sections:
   1. **Theme-based synthesis** (`_build_theme_synthesis`) — For >= 5 papers, sends paper titles, full abstracts, scores, and reasons to the LLM to group into 3-6 thematic clusters with `###` headings and flowing narrative paragraphs. On LLM failure, falls back to `_build_fallback_list` (numbered list with scores and arXiv links). For < 5 papers, uses `_build_simple_summary` (bullet list, no LLM call).
   2. **Paper Details** (`_build_paper_details`) — Comprehensive details for each paper: score, categories, **full author list** (no truncation), **full abstract** (no truncation), relevance reason (`llm_reason`), and arXiv link.
   Handles edge cases: empty results, string-type authors/categories (not just lists), LLM failures.
-- `generate_general_zh(papers, run_date) -> str` — Chinese version of `generate_general`. Three sections: 今日概览 (`_build_overview_zh`), 热门研究方向 (`_build_trending_topics_zh`), 亮点论文 (`_build_highlight_papers_zh`). All LLM prompts use Chinese system messages and instruct the model to respond in Chinese.
-- `generate_specific_zh(ranked_papers, interests, run_date) -> str` — Chinese version of `generate_specific`. Theme synthesis via `_build_theme_synthesis_zh` (LLM groups papers into Chinese thematic clusters), fallback via `_build_fallback_list_zh`, simple summary via `_build_simple_summary_zh`. Paper details via `_build_paper_details_zh` with Chinese labels (评分, 分类, 作者, 摘要, 推荐理由).
+- `generate_general_zh(papers, run_date, date_label=None) -> str` — Chinese version of `generate_general`. When `date_label` is provided, uses 周期概览/本期共收录 instead of 今日概览/今日共收录. Three sections: 今日概览 (`_build_overview_zh`), 热门研究方向 (`_build_trending_topics_zh`), 亮点论文 (`_build_highlight_papers_zh`). All LLM prompts use Chinese system messages and instruct the model to respond in Chinese.
+- `generate_specific_zh(ranked_papers, interests, run_date, date_label=None) -> str` — Chinese version of `generate_specific`. When `date_label` is provided, uses 本期 instead of 今日. Theme synthesis via `_build_theme_synthesis_zh` (LLM groups papers into Chinese thematic clusters), fallback via `_build_fallback_list_zh`, simple summary via `_build_simple_summary_zh`. Paper details via `_build_paper_details_zh` with Chinese labels (评分, 分类, 作者, 摘要, 推荐理由).
 
 Used by: `DailyPipeline` (Phase 10) for generating both report types after matching. Chinese methods called conditionally when `config["report"]["chinese"]` is enabled.
 
@@ -160,8 +162,8 @@ SMTP email delivery with a Markdown → HTML → CSS-inline rendering pipeline.
   1. Converts Markdown to HTML via `markdown.markdown()` with `tables` and `fenced_code` extensions.
   2. Wraps the HTML body in a styled HTML template with a `.wrapper` div (720px max-width) and comprehensive CSS: light gray background, blue-accented h2 headings with left border and background, green-accented blockquotes for LLM reasons, styled tables with alternating row colors, proper list spacing, and responsive viewport meta tag.
   3. Inlines all CSS via `premailer.transform()` — required because most email clients strip `<style>` tags.
-- `send(general_report, specific_report, ranked_papers, run_date, general_zh=None, specific_zh=None)` — Async entry point. Combines English and optional Chinese Markdown reports via `_combine_reports()`, renders to HTML via `render_markdown_to_html()`, builds a MIME message via `_build_email()`, then sends via `_send_smtp()` wrapped in `asyncio.to_thread()` to avoid blocking the event loop.
-- `send_sync(general_report, specific_report, run_date, general_zh=None, specific_zh=None)` — Synchronous variant used by the GUI. Same combine/render/send flow without async wrapping.
+- `send(general_report, specific_report, ranked_papers, run_date, general_zh=None, specific_zh=None, subject_override=None)` — Async entry point. Combines English and optional Chinese Markdown reports via `_combine_reports()`, renders to HTML via `render_markdown_to_html()`, builds a MIME message via `_build_email()`, then sends via `_send_smtp()` wrapped in `asyncio.to_thread()` to avoid blocking the event loop. When `subject_override` is provided, it replaces the default `"{subject_prefix} {run_date}"` subject line.
+- `send_sync(general_report, specific_report, run_date, general_zh=None, specific_zh=None, subject_override=None)` — Synchronous variant used by the GUI. Same combine/render/send flow without async wrapping. `subject_override` allows multi-day reports to set subjects like `"[Daily Papers] 3-Day Report - 2026-02-20~2026-02-22"`.
 - `_combine_reports(general, specific, general_zh=None, specific_zh=None) -> str` — Merges English and Chinese reports into a single Markdown document with `---` separators. Chinese sections appended after English sections when present.
 - `_build_email(html_content, subject) -> MIMEMultipart` — Constructs a `MIMEMultipart("alternative")` message with Subject, From, To headers and a single `MIMEText("...", "html")` attachment.
 - `_send_smtp(msg)` — Synchronous SMTP sending using `smtplib.SMTP` context manager: `starttls()` → `login()` → `send_message()`. Called from a thread via `asyncio.to_thread`. **Error handling (Phase 14):** wraps SMTP operations in `try/except smtplib.SMTPException` — logs the error and re-raises so the pipeline's existing try/except can handle it gracefully.
@@ -228,7 +230,16 @@ Central orchestrator that wires all components together and executes the daily p
   11. **Save report** — `store.save_report()` persists both English and Chinese reports
   12. **Return** — `{"date", "papers_fetched", "new_papers", "matches", "email_sent"}`
 
-Used by: `src/main.py` (Phase 11) in both `--mode run` and `--mode scheduler` modes. `scripts/run_pipeline.py` for CI/CD.
+- `run_range_report(start_date, end_date, report_type) -> dict` — Generates a consolidated report for papers in the given date range. Unlike `run()`, does NOT fetch new papers from arXiv or compute embeddings. Re-runs the matching pipeline (embedding similarity + LLM re-ranking) on all papers already in the DB for the date range.
+  - Uses `run_date_label = f"{start_date}~{end_date}"` for DB storage (both matches and report).
+  - Uses `date_label = f"{start_date} ~ {end_date}"` for display in report headers.
+  - Generates both EN and ZH reports (when `chinese_enabled`), passing `date_label` to all report methods.
+  - Does NOT send email — the GUI handles that separately via the "Send Report via Email" button.
+  - Returns `{"date_range", "report_type", "papers_count", "matches"}`.
+  - Early returns with zero counts if no papers found in range.
+  - Generates general-only report if no interests configured.
+
+Used by: `src/main.py` (Phase 11) in both `--mode run` and `--mode scheduler` modes. `scripts/run_pipeline.py` for CI/CD. `gui/views/dashboard.py` for multi-day report generation.
 
 ### `src/scheduler/scheduler.py` — PipelineScheduler
 Wraps APScheduler's `BlockingScheduler` to run the daily pipeline on a cron schedule.
@@ -273,7 +284,7 @@ Main Streamlit entry with sidebar radio navigation across 5 pages (Dashboard, Pa
 Used by: `streamlit run gui/app.py`. Page modules import `get_embedder` from here.
 
 ### `gui/pages/dashboard.py` — Dashboard Page
-Three metrics row (Papers Today, Matches Today, total Reports) via `st.metric`. Report previews (first 1000 chars) from today's report in General/Specific tabs. "Run Pipeline Now" button creates a `DailyPipeline` and runs via `asyncio.run()` with `st.spinner` feedback.
+Three metrics row (Papers Today, Matches Today, total Reports) via `st.metric`. Report previews (first 1000 chars) from today's report in General/Specific tabs. "Run Pipeline Now" button creates a `DailyPipeline` and runs via `asyncio.run()` with `st.spinner` feedback. **Multi-Day Reports section**: Two buttons — "Generate 3-Day Report" and "Generate 1-Week Report" — each calls `pipeline.run_range_report()` with the appropriate date range and report type. Uses `_run_range_report()` helper with `st.spinner` and success/warning feedback.
 
 Used by: `gui/app.py` when page == "Dashboard".
 
@@ -288,19 +299,19 @@ Lists current interests with type/value/description, embedding status (Y/N), and
 Used by: `gui/app.py` when page == "Interests".
 
 ### `gui/pages/reports.py` → `gui/views/reports.py` — Reports Viewer Page
-Date dropdown from `store.get_all_report_dates()`. Dynamically builds tab list: always English tabs (General Report, Specific Report), plus Chinese tabs (综合报告, 个性化推荐) when Chinese report content exists for the selected date.
+**Type-aware report selector** from `store.get_all_report_entries()`. The selectbox shows labels like `"2026-02-22 (Daily) - 156 papers, 12 matches"` or `"2026-02-20~2026-02-22 (3-Day) - 450 papers, 25 matches"`. Uses `store.get_report_by_id()` for report lookup (instead of date-based lookup) to correctly handle multiple report types. Dynamically builds tab list: always English tabs (General Report, Specific Report), plus Chinese tabs (综合报告, 个性化推荐) when Chinese report content exists for the selected report.
 
 **General Report tab**: Renders the full general report markdown (overview, trending topics, highlights).
 
 **Specific Report tab** — Two blocks:
 1. **Theme synthesis narrative**: The stored specific report is split at the `---` divider (via `_split_specific_report()`). The synthesis portion (before the divider) is rendered as markdown.
-2. **Matched papers table**: Individual matched papers from `store.get_matches_by_date()` shown in a compact `st.dataframe` table (via `_render_matches_table()`). Columns: #, Title, Score ("{N}/10"), Primary Category, Relevance (truncated to 80 chars), arXiv link. Row selection shows full details below (via `_render_match_detail()`) including all scores, full authors, full abstract, full relevance reason, and arXiv link.
+2. **Matched papers table**: Individual matched papers from `store.get_matches_by_date(run_date)` shown in a compact `st.dataframe` table (via `_render_matches_table()`). For multi-day reports, `run_date` is the range label (e.g., `"2026-02-20~2026-02-22"`), which correctly retrieves matches saved under that label. Columns: #, Title, Score ("{N}/10"), Primary Category, Relevance (truncated to 80 chars), arXiv link. Row selection shows full details below (via `_render_match_detail()`) including all scores, full authors, full abstract, full relevance reason, and arXiv link.
 
 **综合报告 (Chinese) tab**: Renders `general_report_zh` markdown when available.
 
 **个性化推荐 (Chinese) tab**: Renders `specific_report_zh` synthesis + matched papers table (same as English Specific Report tab).
 
-**Send Report via Email** button passes both English and Chinese reports to `EmailSender.send_sync()`.
+**Send Report via Email** button passes both English and Chinese reports to `EmailSender.send_sync()`. For multi-day reports, generates a `subject_override` like `"[Daily Papers] 3-Day Report - 2026-02-20~2026-02-22"`.
 
 Used by: `gui/app.py` when page == "Reports".
 
@@ -419,3 +430,10 @@ A reference Markdown template showing the expected email report structure with p
 | Schema migration via PRAGMA | `_migrate_add_column()` checks `PRAGMA table_info()` before `ALTER TABLE` | Safe idempotent migration; existing databases gain new columns without data loss; no migration framework dependency |
 | Combined email for Chinese | `_combine_reports()` merges EN + ZH with `---` separators | Single email with both languages; avoids sending duplicate emails; users see all content in one place |
 | Dynamic GUI tabs for Chinese | Tabs added only when `general_report_zh`/`specific_report_zh` exist | No UI clutter when Chinese reports are not generated; graceful degradation |
+| Range label as run_date | Multi-day reports use `"start~end"` format (e.g., `"2026-02-20~2026-02-22"`) as `run_date` | Natural collision avoidance with daily reports; `matches` table's `UNIQUE(paper_id, run_date)` works transparently; `get_matches_by_date()` retrieves range matches correctly |
+| report_type column with default | `TEXT DEFAULT 'daily'` migration | Backward compatible — existing daily reports automatically get `report_type = 'daily'`; no data migration needed |
+| ID-based report lookup | Reports page uses `get_report_by_id()` instead of `get_report_by_date()` | Correctly handles multiple reports (daily + range) that may share overlapping dates; unambiguous selection |
+| date_label parameter pattern | Optional `date_label` parameter on report generator methods | Backward compatible — `None` default preserves existing behavior; callers opt into period-aware wording |
+| No email from range pipeline | `run_range_report()` does not send email | GUI handles email separately via "Send Report via Email" button; gives users control over when emails are sent |
+| subject_override for email | Optional `subject_override` parameter on `send_sync()` and `send()` | Allows multi-day reports to customize subject lines without changing the default daily format |
+| ORDER BY tiebreaker | `get_all_report_entries()` uses `ORDER BY created_at DESC, id DESC` | SQLite `CURRENT_TIMESTAMP` has second-level precision; `id DESC` tiebreaker ensures deterministic ordering for reports created in the same second |

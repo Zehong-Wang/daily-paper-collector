@@ -11,25 +11,32 @@ class ReportGenerator:
         self.llm = llm
         self.logger = logging.getLogger(__name__)
 
-    async def generate_general(self, papers: list[dict], run_date: str) -> str:
+    async def generate_general(
+        self, papers: list[dict], run_date: str, date_label: str = None
+    ) -> str:
         """Generate a Markdown general report.
 
         Contents:
-        1. Header with run date
+        1. Header with run date (or date_label for multi-day reports)
         2. Today's Overview — total count, count per primary category
         3. Trending Topics — LLM-identified trends from paper titles
         4. Highlight Papers — LLM-selected noteworthy papers
+
+        Args:
+            date_label: Optional display label for multi-day reports (e.g. "2026-02-20 ~ 2026-02-22").
+                        When provided, replaces run_date in the header and uses period-aware wording.
         """
         self.logger.info("Generating general report for %s", run_date)
 
         sections = []
 
         # Header
-        sections.append(f"# Daily Paper Report - {run_date}\n")
+        display_date = date_label or run_date
+        sections.append(f"# Daily Paper Report - {display_date}\n")
         sections.append("## General Report\n")
 
         # Overview section (pure Python, no LLM)
-        sections.append(self._build_overview(papers))
+        sections.append(self._build_overview(papers, period=date_label is not None))
 
         # Trending Topics (LLM)
         trending = await self._build_trending_topics(papers)
@@ -44,7 +51,11 @@ class ReportGenerator:
         return report
 
     async def generate_specific(
-        self, ranked_papers: list[dict], interests: list[dict], run_date: str
+        self,
+        ranked_papers: list[dict],
+        interests: list[dict],
+        run_date: str,
+        date_label: str = None,
     ) -> str:
         """Generate a Markdown specific report with theme-based synthesis.
 
@@ -55,6 +66,10 @@ class ReportGenerator:
         1. Header
         2. Theme-based synthesis (LLM-generated narrative grouped by themes)
         3. Paper Details section with full authors, abstracts, and relevance reasons
+
+        Args:
+            date_label: Optional display label for multi-day reports. When provided,
+                        uses "in this period" instead of "today" in the intro text.
         """
         self.logger.info("Generating specific report for %s", run_date)
 
@@ -62,13 +77,14 @@ class ReportGenerator:
 
         sections.append("## Specific Report (Based on Your Interests)\n")
 
+        period_text = "in this period" if date_label else "today"
         if not ranked_papers:
-            sections.append("No papers matched your interests today.\n")
+            sections.append(f"No papers matched your interests {period_text}.\n")
             self.logger.info("Specific report generation complete (no matches)")
             return "\n".join(sections)
 
         sections.append(
-            f"Top {len(ranked_papers)} papers matching your research interests today:\n"
+            f"Top {len(ranked_papers)} papers matching your research interests {period_text}:\n"
         )
 
         # Theme-based synthesis (LLM for >= 5 papers, simple summary otherwise)
@@ -200,14 +216,21 @@ class ReportGenerator:
 
     # ---- Chinese report generation methods ----
 
-    async def generate_general_zh(self, papers: list[dict], run_date: str) -> str:
-        """Generate a Chinese Markdown general report."""
+    async def generate_general_zh(
+        self, papers: list[dict], run_date: str, date_label: str = None
+    ) -> str:
+        """Generate a Chinese Markdown general report.
+
+        Args:
+            date_label: Optional display label for multi-day reports.
+        """
         self.logger.info("Generating Chinese general report for %s", run_date)
 
         sections = []
-        sections.append(f"# 每日论文报告 - {run_date}\n")
+        display_date = date_label or run_date
+        sections.append(f"# 每日论文报告 - {display_date}\n")
         sections.append("## 综合报告\n")
-        sections.append(self._build_overview_zh(papers))
+        sections.append(self._build_overview_zh(papers, period=date_label is not None))
 
         trending = await self._build_trending_topics_zh(papers)
         sections.append(trending)
@@ -220,20 +243,29 @@ class ReportGenerator:
         return report
 
     async def generate_specific_zh(
-        self, ranked_papers: list[dict], interests: list[dict], run_date: str
+        self,
+        ranked_papers: list[dict],
+        interests: list[dict],
+        run_date: str,
+        date_label: str = None,
     ) -> str:
-        """Generate a Chinese Markdown specific report with theme-based synthesis."""
+        """Generate a Chinese Markdown specific report with theme-based synthesis.
+
+        Args:
+            date_label: Optional display label for multi-day reports.
+        """
         self.logger.info("Generating Chinese specific report for %s", run_date)
 
         sections = []
         sections.append("## 个性化推荐报告（基于您的研究兴趣）\n")
 
+        period_text = "本期" if date_label else "今日"
         if not ranked_papers:
-            sections.append("今日没有匹配您研究兴趣的论文。\n")
+            sections.append(f"{period_text}没有匹配您研究兴趣的论文。\n")
             self.logger.info("Chinese specific report generation complete (no matches)")
             return "\n".join(sections)
 
-        sections.append(f"今日共有 {len(ranked_papers)} 篇论文匹配您的研究兴趣：\n")
+        sections.append(f"{period_text}共有 {len(ranked_papers)} 篇论文匹配您的研究兴趣：\n")
 
         synthesis = await self._build_theme_synthesis_zh(ranked_papers, interests)
         sections.append(synthesis)
@@ -348,12 +380,20 @@ class ReportGenerator:
 
         return "\n".join(lines)
 
-    def _build_overview_zh(self, papers: list[dict]) -> str:
-        """Build Chinese overview section with paper counts per primary category."""
+    def _build_overview_zh(self, papers: list[dict], period: bool = False) -> str:
+        """Build Chinese overview section with paper counts per primary category.
+
+        Args:
+            period: If True, use period-aware wording instead of "today".
+        """
         total = len(papers)
         lines = []
-        lines.append("### 今日概览\n")
-        lines.append(f"今日共收录 **{total}** 篇新论文\n")
+        if period:
+            lines.append("### 周期概览\n")
+            lines.append(f"本期共收录 **{total}** 篇论文\n")
+        else:
+            lines.append("### 今日概览\n")
+            lines.append(f"今日共收录 **{total}** 篇新论文\n")
 
         if papers:
             category_counter = Counter()
@@ -450,12 +490,20 @@ class ReportGenerator:
 
     # ---- English report helper methods ----
 
-    def _build_overview(self, papers: list[dict]) -> str:
-        """Build the overview section with paper counts per primary category."""
+    def _build_overview(self, papers: list[dict], period: bool = False) -> str:
+        """Build the overview section with paper counts per primary category.
+
+        Args:
+            period: If True, use "Period Overview" wording instead of "Today's Overview".
+        """
         total = len(papers)
         lines = []
-        lines.append("### Today's Overview\n")
-        lines.append(f"**{total}** new papers collected\n")
+        if period:
+            lines.append("### Period Overview\n")
+            lines.append(f"**{total}** papers in this period\n")
+        else:
+            lines.append("### Today's Overview\n")
+            lines.append(f"**{total}** new papers collected\n")
 
         if papers:
             # Count by primary category (first in the categories list)

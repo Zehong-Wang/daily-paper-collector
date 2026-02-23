@@ -400,3 +400,94 @@ class TestEdgeCases:
         papers[0]["categories"] = ["cs.CV"]
         report = await gen.generate_general(papers, "2025-01-15")
         assert "| cs.CV | 1 |" in report
+
+
+# ---------------------------------------------------------------------------
+# Date Label Tests (Multi-Day Reports)
+# ---------------------------------------------------------------------------
+
+
+class TestDateLabel:
+    @pytest.fixture
+    def llm(self):
+        return MockLLMProvider()
+
+    @pytest.fixture
+    def gen(self, llm):
+        return ReportGenerator(llm)
+
+    @pytest.mark.asyncio
+    async def test_general_header_uses_date_label(self, gen):
+        papers = _make_papers(5)
+        report = await gen.generate_general(
+            papers, "2026-02-20~2026-02-22", date_label="2026-02-20 ~ 2026-02-22"
+        )
+        assert "# Daily Paper Report - 2026-02-20 ~ 2026-02-22" in report
+
+    @pytest.mark.asyncio
+    async def test_general_period_overview(self, gen):
+        papers = _make_papers(5)
+        report = await gen.generate_general(
+            papers, "2026-02-20~2026-02-22", date_label="2026-02-20 ~ 2026-02-22"
+        )
+        assert "### Period Overview" in report
+        assert "**5** papers in this period" in report
+        assert "Today's Overview" not in report
+
+    @pytest.mark.asyncio
+    async def test_general_no_date_label_uses_run_date(self, gen):
+        """Without date_label, header should use run_date and Today's Overview."""
+        papers = _make_papers(3)
+        report = await gen.generate_general(papers, "2025-01-15")
+        assert "# Daily Paper Report - 2025-01-15" in report
+        assert "### Today's Overview" in report
+        assert "Period Overview" not in report
+
+    @pytest.mark.asyncio
+    async def test_specific_period_text(self, gen):
+        ranked = _make_ranked_papers(3)
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific(
+            ranked, interests, "2026-02-20~2026-02-22",
+            date_label="2026-02-20 ~ 2026-02-22",
+        )
+        assert "in this period" in report
+        assert "today" not in report.lower().split("in this period")[0][-50:]
+
+    @pytest.mark.asyncio
+    async def test_specific_no_matches_period(self, gen):
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific(
+            [], interests, "2026-02-20~2026-02-22",
+            date_label="2026-02-20 ~ 2026-02-22",
+        )
+        assert "No papers matched your interests in this period" in report
+
+    @pytest.mark.asyncio
+    async def test_general_zh_date_label(self, gen):
+        papers = _make_papers(3)
+        report = await gen.generate_general_zh(
+            papers, "2026-02-20~2026-02-22", date_label="2026-02-20 ~ 2026-02-22"
+        )
+        assert "2026-02-20 ~ 2026-02-22" in report
+        assert "### 周期概览" in report
+        assert "本期共收录" in report
+
+    @pytest.mark.asyncio
+    async def test_specific_zh_period_text(self, gen):
+        ranked = _make_ranked_papers(3)
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific_zh(
+            ranked, interests, "2026-02-20~2026-02-22",
+            date_label="2026-02-20 ~ 2026-02-22",
+        )
+        assert "本期" in report
+
+    @pytest.mark.asyncio
+    async def test_specific_zh_no_matches_period(self, gen):
+        interests = [{"type": "keyword", "value": "transformers"}]
+        report = await gen.generate_specific_zh(
+            [], interests, "2026-02-20~2026-02-22",
+            date_label="2026-02-20 ~ 2026-02-22",
+        )
+        assert "本期没有匹配您研究兴趣的论文" in report

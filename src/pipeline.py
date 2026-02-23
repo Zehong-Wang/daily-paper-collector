@@ -167,3 +167,133 @@ class DailyPipeline:
             "matches": len(ranked),
             "email_sent": email_sent,
         }
+
+    async def run_range_report(
+        self, start_date: str, end_date: str, report_type: str
+    ) -> dict:
+        """Generate a report for papers in the given date range.
+
+        Unlike run(), this does NOT fetch new papers from arXiv or compute
+        embeddings. It re-runs the matching pipeline on all papers already
+        in the DB for the date range.
+
+        Args:
+            start_date: ISO date string, e.g. "2026-02-20"
+            end_date: ISO date string, e.g. "2026-02-22"
+            report_type: "3day" or "1week"
+
+        Returns:
+            Summary dict with keys: date_range, report_type, papers_count, matches
+        """
+        date_label = f"{start_date} ~ {end_date}"
+        run_date_label = f"{start_date}~{end_date}"
+        self.logger.info("Starting %s report for %s", report_type, date_label)
+
+        # Step 1: Get all papers in range that have embeddings
+        papers_in_range = self.store.get_papers_in_date_range_with_embeddings(
+            start_date, end_date
+        )
+        self.logger.info(
+            "Found %d papers with embeddings in range %s",
+            len(papers_in_range),
+            date_label,
+        )
+
+        if not papers_in_range:
+            self.logger.warning("No papers found in date range %s", date_label)
+            return {
+                "date_range": date_label,
+                "report_type": report_type,
+                "papers_count": 0,
+                "matches": 0,
+            }
+
+        # Step 2: Get interests
+        interests = self.interest_mgr.get_interests_with_embeddings()
+        if not interests:
+            self.logger.warning("No interests configured. Generating general report only.")
+            general = await self.report_gen.generate_general(
+                papers_in_range, run_date_label, date_label=date_label
+            )
+            general_zh = None
+            if self.chinese_enabled:
+                general_zh = await self.report_gen.generate_general_zh(
+                    papers_in_range, run_date_label, date_label=date_label
+                )
+            self.store.save_report(
+                run_date_label,
+                general,
+                "",
+                len(papers_in_range),
+                0,
+                general_report_zh=general_zh,
+                report_type=report_type,
+            )
+            return {
+                "date_range": date_label,
+                "report_type": report_type,
+                "papers_count": len(papers_in_range),
+                "matches": 0,
+            }
+
+        # Step 3: Embedding similarity matching
+        top_n = self.config["matching"]["embedding_top_n"]
+        threshold = self.config["matching"]["similarity_threshold"]
+        candidates = self.embedder.find_similar(
+            interests, papers_in_range, top_n, threshold
+        )
+        self.logger.info("Embedding matcher found %d candidates", len(candidates))
+
+        # Step 4: LLM re-ranking
+        ranked = await self.ranker.rerank(
+            candidates, interests, max_concurrent=self.max_concurrent
+        )
+        self.logger.info("LLM re-ranker selected %d papers", len(ranked))
+
+        # Step 5: Save matches (using range label as run_date)
+        for paper in ranked:
+            self.store.save_match(
+                paper["id"],
+                run_date_label,
+                paper.get("embedding_score", 0),
+                paper.get("llm_score", 0),
+                paper.get("llm_reason", ""),
+            )
+
+        # Step 6: Generate reports
+        general = await self.report_gen.generate_general(
+            papers_in_range, run_date_label, date_label=date_label
+        )
+        specific = await self.report_gen.generate_specific(
+            ranked, interests, run_date_label, date_label=date_label
+        )
+
+        general_zh = None
+        specific_zh = None
+        if self.chinese_enabled:
+            self.logger.info("Generating Chinese reports for range %s...", date_label)
+            general_zh = await self.report_gen.generate_general_zh(
+                papers_in_range, run_date_label, date_label=date_label
+            )
+            specific_zh = await self.report_gen.generate_specific_zh(
+                ranked, interests, run_date_label, date_label=date_label
+            )
+
+        # Step 7: Save report
+        self.store.save_report(
+            run_date_label,
+            general,
+            specific,
+            len(papers_in_range),
+            len(ranked),
+            general_report_zh=general_zh,
+            specific_report_zh=specific_zh,
+            report_type=report_type,
+        )
+
+        return {
+            "date_range": date_label,
+            "report_type": report_type,
+            "papers_count": len(papers_in_range),
+            "matches": len(ranked),
+        }

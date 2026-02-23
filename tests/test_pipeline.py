@@ -504,6 +504,208 @@ class TestDailyPipelineFullRun:
             )
 
 
+class TestRangeReport:
+    """Test the run_range_report method for multi-day reports."""
+
+    @pytest.mark.asyncio
+    async def test_range_report_full_flow(self, config, tmp_path):
+        """Test full happy path: papers in range → match → rank → report → save."""
+        fake_papers = _make_fake_papers(5)
+        interests = _make_interests()
+        candidates = _make_candidates(fake_papers[:4])
+        ranked = _make_ranked(candidates)
+
+        with (
+            patch("src.pipeline.ArxivFetcher"),
+            patch("src.pipeline.Embedder") as MockEmbedder,
+            patch("src.pipeline.create_llm_provider") as mock_create_llm,
+            patch("src.pipeline.LLMRanker") as MockRanker,
+            patch("src.pipeline.InterestManager") as MockInterestMgr,
+            patch("src.pipeline.ReportGenerator") as MockReportGen,
+            patch("src.pipeline.EmailSender"),
+        ):
+            mock_embedder = MockEmbedder.return_value
+            mock_embedder.find_similar = MagicMock(return_value=candidates)
+
+            mock_create_llm.return_value = MagicMock()
+
+            mock_ranker = MockRanker.return_value
+            mock_ranker.rerank = AsyncMock(return_value=ranked)
+
+            mock_interest_mgr = MockInterestMgr.return_value
+            mock_interest_mgr.get_interests_with_embeddings = MagicMock(
+                return_value=interests
+            )
+
+            mock_report_gen = MockReportGen.return_value
+            mock_report_gen.generate_general = AsyncMock(return_value="# General")
+            mock_report_gen.generate_specific = AsyncMock(return_value="## Specific")
+
+            pipeline = DailyPipeline(config)
+            pipeline.store.get_papers_in_date_range_with_embeddings = MagicMock(
+                return_value=candidates
+            )
+            pipeline.store.save_match = MagicMock(return_value=1)
+            pipeline.store.save_report = MagicMock(return_value=1)
+
+            result = await pipeline.run_range_report(
+                "2026-02-20", "2026-02-22", "3day"
+            )
+
+            assert result["papers_count"] == len(candidates)
+            assert result["matches"] == len(ranked)
+            assert result["report_type"] == "3day"
+            assert result["date_range"] == "2026-02-20 ~ 2026-02-22"
+
+            # Verify papers fetched from range
+            pipeline.store.get_papers_in_date_range_with_embeddings.assert_called_once_with(
+                "2026-02-20", "2026-02-22"
+            )
+
+            # Verify matching pipeline was run
+            mock_embedder.find_similar.assert_called_once()
+            mock_ranker.rerank.assert_awaited_once()
+
+            # Verify matches saved with range label
+            assert pipeline.store.save_match.call_count == len(ranked)
+            first_call = pipeline.store.save_match.call_args_list[0]
+            assert first_call[0][1] == "2026-02-20~2026-02-22"  # run_date_label
+
+            # Verify report generated with date_label
+            gen_call = mock_report_gen.generate_general.call_args
+            assert gen_call[0][1] == "2026-02-20~2026-02-22"
+            assert gen_call[1]["date_label"] == "2026-02-20 ~ 2026-02-22"
+
+            # Verify report saved with report_type
+            save_call = pipeline.store.save_report.call_args
+            assert save_call[0][0] == "2026-02-20~2026-02-22"
+            assert save_call[1]["report_type"] == "3day"
+
+    @pytest.mark.asyncio
+    async def test_range_report_no_papers(self, config, tmp_path):
+        """Returns early with zero counts when no papers in range."""
+        with (
+            patch("src.pipeline.ArxivFetcher"),
+            patch("src.pipeline.Embedder"),
+            patch("src.pipeline.create_llm_provider") as mock_create_llm,
+            patch("src.pipeline.LLMRanker"),
+            patch("src.pipeline.InterestManager"),
+            patch("src.pipeline.ReportGenerator") as MockReportGen,
+            patch("src.pipeline.EmailSender"),
+        ):
+            mock_create_llm.return_value = MagicMock()
+
+            pipeline = DailyPipeline(config)
+            pipeline.store.get_papers_in_date_range_with_embeddings = MagicMock(
+                return_value=[]
+            )
+
+            result = await pipeline.run_range_report(
+                "2026-02-20", "2026-02-22", "3day"
+            )
+
+            assert result["papers_count"] == 0
+            assert result["matches"] == 0
+
+            # Report generation should NOT be called
+            MockReportGen.return_value.generate_general.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_range_report_no_interests(self, config, tmp_path):
+        """Generates general-only report when no interests configured."""
+        fake_papers = _make_fake_papers(3)
+        candidates = _make_candidates(fake_papers)
+
+        with (
+            patch("src.pipeline.ArxivFetcher"),
+            patch("src.pipeline.Embedder") as MockEmbedder,
+            patch("src.pipeline.create_llm_provider") as mock_create_llm,
+            patch("src.pipeline.LLMRanker") as MockRanker,
+            patch("src.pipeline.InterestManager") as MockInterestMgr,
+            patch("src.pipeline.ReportGenerator") as MockReportGen,
+            patch("src.pipeline.EmailSender"),
+        ):
+            mock_create_llm.return_value = MagicMock()
+
+            mock_interest_mgr = MockInterestMgr.return_value
+            mock_interest_mgr.get_interests_with_embeddings = MagicMock(return_value=[])
+
+            mock_report_gen = MockReportGen.return_value
+            mock_report_gen.generate_general = AsyncMock(return_value="# General Only")
+
+            pipeline = DailyPipeline(config)
+            pipeline.store.get_papers_in_date_range_with_embeddings = MagicMock(
+                return_value=candidates
+            )
+            pipeline.store.save_report = MagicMock(return_value=1)
+
+            result = await pipeline.run_range_report(
+                "2026-02-20", "2026-02-22", "3day"
+            )
+
+            assert result["papers_count"] == len(candidates)
+            assert result["matches"] == 0
+
+            # General report generated, specific NOT
+            mock_report_gen.generate_general.assert_awaited_once()
+            mock_report_gen.generate_specific.assert_not_called()
+
+            # Matching NOT called
+            MockEmbedder.return_value.find_similar.assert_not_called()
+            MockRanker.return_value.rerank.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_range_report_1week(self, config, tmp_path):
+        """Test 1-week report type."""
+        fake_papers = _make_fake_papers(3)
+        interests = _make_interests()
+        candidates = _make_candidates(fake_papers)
+        ranked = _make_ranked(candidates)
+
+        with (
+            patch("src.pipeline.ArxivFetcher"),
+            patch("src.pipeline.Embedder") as MockEmbedder,
+            patch("src.pipeline.create_llm_provider") as mock_create_llm,
+            patch("src.pipeline.LLMRanker") as MockRanker,
+            patch("src.pipeline.InterestManager") as MockInterestMgr,
+            patch("src.pipeline.ReportGenerator") as MockReportGen,
+            patch("src.pipeline.EmailSender"),
+        ):
+            mock_embedder = MockEmbedder.return_value
+            mock_embedder.find_similar = MagicMock(return_value=candidates)
+
+            mock_create_llm.return_value = MagicMock()
+
+            mock_ranker = MockRanker.return_value
+            mock_ranker.rerank = AsyncMock(return_value=ranked)
+
+            mock_interest_mgr = MockInterestMgr.return_value
+            mock_interest_mgr.get_interests_with_embeddings = MagicMock(
+                return_value=interests
+            )
+
+            mock_report_gen = MockReportGen.return_value
+            mock_report_gen.generate_general = AsyncMock(return_value="# General")
+            mock_report_gen.generate_specific = AsyncMock(return_value="## Specific")
+
+            pipeline = DailyPipeline(config)
+            pipeline.store.get_papers_in_date_range_with_embeddings = MagicMock(
+                return_value=candidates
+            )
+            pipeline.store.save_match = MagicMock(return_value=1)
+            pipeline.store.save_report = MagicMock(return_value=1)
+
+            result = await pipeline.run_range_report(
+                "2026-02-16", "2026-02-22", "1week"
+            )
+
+            assert result["report_type"] == "1week"
+            assert result["date_range"] == "2026-02-16 ~ 2026-02-22"
+
+            save_call = pipeline.store.save_report.call_args
+            assert save_call[1]["report_type"] == "1week"
+
+
 class TestDailyPipelineInit:
     """Test that the pipeline initializes all components correctly."""
 

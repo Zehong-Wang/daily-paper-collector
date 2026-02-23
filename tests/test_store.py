@@ -377,3 +377,106 @@ class TestReportCRUD:
     def test_get_all_report_dates_empty(self, store):
         dates = store.get_all_report_dates()
         assert dates == []
+
+
+# --- Range Report CRUD ---
+
+
+class TestRangeReportCRUD:
+    def test_save_report_with_report_type(self, store):
+        report_id = store.save_report(
+            "2026-02-20~2026-02-22",
+            "# General",
+            "## Specific",
+            150,
+            20,
+            report_type="3day",
+        )
+        assert report_id > 0
+        report = store.get_report_by_id(report_id)
+        assert report["report_type"] == "3day"
+        assert report["run_date"] == "2026-02-20~2026-02-22"
+
+    def test_save_report_default_type_is_daily(self, store):
+        report_id = store.save_report("2026-02-22", "# Gen", "## Spec", 100, 10)
+        report = store.get_report_by_id(report_id)
+        assert report["report_type"] == "daily"
+
+    def test_get_all_report_entries(self, store):
+        store.save_report("2026-02-22", "gen1", "spec1", 50, 5)
+        store.save_report(
+            "2026-02-20~2026-02-22", "gen2", "spec2", 150, 20, report_type="3day"
+        )
+        store.save_report(
+            "2026-02-16~2026-02-22", "gen3", "spec3", 400, 30, report_type="1week"
+        )
+
+        entries = store.get_all_report_entries()
+        assert len(entries) == 3
+        # Should include id, run_date, report_type, paper_count, matched_count, created_at
+        for e in entries:
+            assert "id" in e
+            assert "run_date" in e
+            assert "report_type" in e
+            assert "paper_count" in e
+            assert "matched_count" in e
+            assert "created_at" in e
+        # Should NOT include full report text
+        assert "general_report" not in entries[0]
+
+    def test_get_all_report_entries_sorted_by_created_at_desc(self, store):
+        id1 = store.save_report("2026-02-20", "g1", "s1", 50, 5)
+        id2 = store.save_report("2026-02-21", "g2", "s2", 60, 6)
+        id3 = store.save_report("2026-02-22", "g3", "s3", 70, 7)
+
+        entries = store.get_all_report_entries()
+        ids = [e["id"] for e in entries]
+        assert ids == [id3, id2, id1]
+
+    def test_get_report_by_id(self, store):
+        id1 = store.save_report("2026-02-22", "# Gen1", "## Spec1", 100, 10)
+        id2 = store.save_report(
+            "2026-02-20~2026-02-22", "# Gen2", "## Spec2", 150, 20, report_type="3day"
+        )
+
+        report1 = store.get_report_by_id(id1)
+        assert report1["general_report"] == "# Gen1"
+        assert report1["report_type"] == "daily"
+
+        report2 = store.get_report_by_id(id2)
+        assert report2["general_report"] == "# Gen2"
+        assert report2["report_type"] == "3day"
+
+    def test_get_report_by_id_not_found(self, store):
+        assert store.get_report_by_id(9999) is None
+
+    def test_report_type_column_migration(self, tmp_path):
+        """Verify that report_type column is added via migration."""
+        store = PaperStore(str(tmp_path / "test.db"))
+        conn = store._get_conn()
+        try:
+            cursor = conn.execute("PRAGMA table_info(daily_reports)")
+            columns = {row[1] for row in cursor.fetchall()}
+            assert "report_type" in columns
+        finally:
+            conn.close()
+
+    def test_save_report_with_chinese_and_type(self, store):
+        report_id = store.save_report(
+            "2026-02-20~2026-02-22",
+            "# General",
+            "## Specific",
+            150,
+            20,
+            general_report_zh="# 综合报告",
+            specific_report_zh="## 个性化推荐",
+            report_type="1week",
+        )
+        report = store.get_report_by_id(report_id)
+        assert report["general_report_zh"] == "# 综合报告"
+        assert report["specific_report_zh"] == "## 个性化推荐"
+        assert report["report_type"] == "1week"
+
+    def test_get_all_report_entries_empty(self, store):
+        entries = store.get_all_report_entries()
+        assert entries == []

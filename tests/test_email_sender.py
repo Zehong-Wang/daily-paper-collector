@@ -254,3 +254,71 @@ class TestSend:
         with patch("src.email.sender.smtplib.SMTP", return_value=mock_instance) as mock_cls:
             await s.send("# Report", "## Details", [], "2025-01-15")
             mock_cls.assert_called_once_with("smtp.custom.com", 465)
+
+
+# ---------------------------------------------------------------------------
+# TestSubjectOverride
+# ---------------------------------------------------------------------------
+
+
+class TestSubjectOverride:
+    def test_send_sync_subject_override(self, sender):
+        """send_sync with subject_override should use the override."""
+        mock_smtp_instance = MagicMock()
+        mock_smtp_instance.__enter__ = MagicMock(return_value=mock_smtp_instance)
+        mock_smtp_instance.__exit__ = MagicMock(return_value=False)
+
+        with patch("src.email.sender.smtplib.SMTP", return_value=mock_smtp_instance):
+            sender.send_sync(
+                "# General",
+                "## Specific",
+                "2026-02-20~2026-02-22",
+                subject_override="[Daily Papers] 3-Day Report - 2026-02-20~2026-02-22",
+            )
+
+        sent_msg = mock_smtp_instance.send_message.call_args[0][0]
+        assert sent_msg["Subject"] == "[Daily Papers] 3-Day Report - 2026-02-20~2026-02-22"
+
+    def test_send_sync_no_override_uses_default(self, sender):
+        """send_sync without subject_override should use the default format."""
+        mock_smtp_instance = MagicMock()
+        mock_smtp_instance.__enter__ = MagicMock(return_value=mock_smtp_instance)
+        mock_smtp_instance.__exit__ = MagicMock(return_value=False)
+
+        with patch("src.email.sender.smtplib.SMTP", return_value=mock_smtp_instance):
+            sender.send_sync("# General", "## Specific", "2026-02-22")
+
+        sent_msg = mock_smtp_instance.send_message.call_args[0][0]
+        assert sent_msg["Subject"] == "[Daily Papers] 2026-02-22"
+
+    @pytest.mark.asyncio
+    async def test_send_async_subject_override(self, sender):
+        """Async send with subject_override should use the override."""
+        mock_smtp_instance = MagicMock()
+        mock_smtp_instance.__enter__ = MagicMock(return_value=mock_smtp_instance)
+        mock_smtp_instance.__exit__ = MagicMock(return_value=False)
+
+        with patch("src.email.sender.smtplib.SMTP", return_value=mock_smtp_instance):
+            await sender.send(
+                "# General",
+                "## Specific",
+                [],
+                "2026-02-20~2026-02-22",
+                subject_override="[Daily Papers] 1-Week Report - 2026-02-16~2026-02-22",
+            )
+
+        sent_msg = mock_smtp_instance.send_message.call_args[0][0]
+        assert sent_msg["Subject"] == "[Daily Papers] 1-Week Report - 2026-02-16~2026-02-22"
+
+    @pytest.mark.asyncio
+    async def test_send_async_no_override_uses_default(self, sender):
+        """Async send without subject_override should use the default format."""
+        mock_smtp_instance = MagicMock()
+        mock_smtp_instance.__enter__ = MagicMock(return_value=mock_smtp_instance)
+        mock_smtp_instance.__exit__ = MagicMock(return_value=False)
+
+        with patch("src.email.sender.smtplib.SMTP", return_value=mock_smtp_instance):
+            await sender.send("# General", "## Specific", [], "2026-02-22")
+
+        sent_msg = mock_smtp_instance.send_message.call_args[0][0]
+        assert sent_msg["Subject"] == "[Daily Papers] 2026-02-22"

@@ -73,6 +73,10 @@ class PaperStore:
             # Migrate existing tables: add Chinese report columns if missing
             self._migrate_add_column(conn, "daily_reports", "general_report_zh", "TEXT")
             self._migrate_add_column(conn, "daily_reports", "specific_report_zh", "TEXT")
+            # Migrate: add report_type column for multi-day reports
+            self._migrate_add_column(
+                conn, "daily_reports", "report_type", "TEXT DEFAULT 'daily'"
+            )
             conn.commit()
         finally:
             conn.close()
@@ -425,16 +429,20 @@ class PaperStore:
         matched_count: int,
         general_report_zh: str = None,
         specific_report_zh: str = None,
+        report_type: str = "daily",
     ) -> int:
-        """Insert a daily report record. Return new id."""
+        """Insert a report record. Return new id.
+
+        report_type: 'daily' | '3day' | '1week'
+        """
         conn = self._get_conn()
         try:
             cursor = conn.execute(
                 """INSERT INTO daily_reports
                    (run_date, general_report, specific_report,
                     general_report_zh, specific_report_zh,
-                    paper_count, matched_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    paper_count, matched_count, report_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_date,
                     general_report,
@@ -443,6 +451,7 @@ class PaperStore:
                     specific_report_zh,
                     paper_count,
                     matched_count,
+                    report_type,
                 ),
             )
             conn.commit()
@@ -472,5 +481,36 @@ class PaperStore:
                 "SELECT DISTINCT run_date FROM daily_reports ORDER BY run_date DESC"
             ).fetchall()
             return [row["run_date"] for row in rows]
+        finally:
+            conn.close()
+
+    def get_all_report_entries(self) -> list[dict]:
+        """Return all report entries with metadata, sorted by created_at descending.
+
+        Each entry includes: id, run_date, report_type, paper_count, matched_count,
+        created_at. Used by the Reports page to display a rich report selector.
+        """
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT id, run_date, report_type, paper_count, matched_count, created_at
+                   FROM daily_reports
+                   ORDER BY created_at DESC, id DESC"""
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_report_by_id(self, report_id: int) -> dict | None:
+        """Return a report by its primary key ID, or None."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM daily_reports WHERE id = ?",
+                (report_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            return dict(row)
         finally:
             conn.close()

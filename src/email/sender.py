@@ -181,6 +181,7 @@ strong {{
         run_date: str,
         general_zh: str = None,
         specific_zh: str = None,
+        subject_override: str = None,
     ):
         """Synchronous version of send() for non-async contexts (e.g. Streamlit GUI)."""
         self.logger.info("Preparing email for %s", run_date)
@@ -188,7 +189,7 @@ strong {{
             general_report, specific_report, general_zh, specific_zh
         )
         html_content = self.render_markdown_to_html(combined_md)
-        subject = f"{self.subject_prefix} {run_date}"
+        subject = subject_override or f"{self.subject_prefix} {run_date}"
         msg = self._build_email(html_content, subject)
         self._send_smtp(msg)
         self.logger.info("Email sent successfully to %s", ", ".join(self.to_addresses))
@@ -201,6 +202,7 @@ strong {{
         run_date: str,
         general_zh: str = None,
         specific_zh: str = None,
+        subject_override: str = None,
     ):
         """Assemble and send the daily email.
 
@@ -223,7 +225,7 @@ strong {{
         html_content = self.render_markdown_to_html(combined_md)
 
         # Build email
-        subject = f"{self.subject_prefix} {run_date}"
+        subject = subject_override or f"{self.subject_prefix} {run_date}"
         msg = self._build_email(html_content, subject)
 
         # Send via SMTP in a thread to avoid blocking the event loop

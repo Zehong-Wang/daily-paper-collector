@@ -91,6 +91,34 @@ python -m src.main --mode run
 python -m src.main --mode scheduler
 ```
 
+### Run as background service (macOS launchd)
+
+Both the scheduler and the Streamlit GUI can run as background services that survive reboots and auto-restart on crash.
+
+Two plist files are provided in `~/Library/LaunchAgents/`:
+
+| Service | Plist | What it does |
+|---------|-------|--------------|
+| Scheduler | `com.daily-paper-collector.plist` | Runs pipeline daily at 8:00 AM |
+| GUI | `com.daily-paper-collector-gui.plist` | Streamlit GUI at http://localhost:8501 |
+
+```bash
+# Start both services
+launchctl load ~/Library/LaunchAgents/com.daily-paper-collector.plist
+launchctl load ~/Library/LaunchAgents/com.daily-paper-collector-gui.plist
+
+# Check status (PID > 0 and exit code 0 means running)
+launchctl list | grep daily-paper
+
+# Stop services
+launchctl unload ~/Library/LaunchAgents/com.daily-paper-collector.plist
+launchctl unload ~/Library/LaunchAgents/com.daily-paper-collector-gui.plist
+
+# View logs
+tail -f logs/scheduler.log      # scheduler pipeline logs
+tail -f logs/gui.log             # Streamlit GUI logs
+```
+
 ### Launch Streamlit GUI
 
 ```bash

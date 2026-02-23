@@ -45,9 +45,9 @@ email:
     port: 587
     username_env: "EMAIL_USERNAME"
     password_env: "EMAIL_PASSWORD"
-  from: "zehongwang0414@gmail.com"
+  from: "zehongwang0414@gmail.com" # Set your own email address here
   to:
-    - "zehongwang0414@gmail.com"
+    - "zehongwang0414@gmail.com" # Set your own email addresses here
   subject_prefix: "[Daily Papers]"
 
 # Scheduler settings
